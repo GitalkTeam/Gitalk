@@ -1,6 +1,9 @@
 package com.gitalk;
 
 import com.gitalk.chatbot.ChatBot;
+import com.gitalk.user.JoinAndLoginView;
+import com.gitalk.user.UserRepository;
+import com.gitalk.user.UserService;
 
 import java.io.BufferedReader;
 import java.io.Console;
@@ -10,6 +13,15 @@ public class GitalkApplication {
 
     public static void main(String[] args) throws Exception {
         System.out.println("\nGitalk - 개발자를 위한 CLI 챗봇\n");
+
+        // 1. 의존성 생성
+        UserRepository userRepository = new UserRepository();
+        UserService userService = new UserService(userRepository);
+        JoinAndLoginView joinAndLoginView = new JoinAndLoginView(userService);
+
+        // 2. 프로그램 시작
+        joinAndLoginView.start();
+
 
         Console console = System.console();
         BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
