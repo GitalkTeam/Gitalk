@@ -1,0 +1,7 @@
+out/
+lib/
+.idea/
+*.class
+*.iml
+config/config.properties
+src/main/resources/config.properties
