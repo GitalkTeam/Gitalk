@@ -19,10 +19,10 @@ public class UserService {
     public boolean login(String email, String password) {
 
         Users user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("존재하지 않는 사용자"));
+                .orElseThrow(() -> new RuntimeException("로그인 및 비밀번호가 잘못되었습니다."));
 
         if (!user.getPassword().equals(encrypt(password))) {
-            throw new RuntimeException("비밀번호 불일치");
+            throw new RuntimeException("로그인 및 비밀번호가 잘못되었습니다.");
         }
 
         return true;

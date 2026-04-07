@@ -8,16 +8,21 @@ package com.gitalk.user;
  * @since 04-07 (화) 오후 3:00
  */
 import java.io.BufferedReader;
+import java.io.Console;
 import java.io.InputStreamReader;
 import java.io.IOException;
 
 public class JoinAndLoginView {
 
+
     private final UserService userService;
     private final BufferedReader reader;
+    private final Console console;
+
     public JoinAndLoginView(UserService userService) {
         this.userService = userService;
         this.reader = new BufferedReader(new InputStreamReader(System.in));
+        this.console = System.console();
     }
 
     public void start() {
@@ -56,19 +61,15 @@ public class JoinAndLoginView {
         }
     }
 
+
     public boolean signUp() {
 
         try {
-            System.out.println("\n[ 회원가입 ] ");
+            System.out.println("\n [ 회원가입 ]");
 
-            System.out.print("이메일: ");
-            String email = reader.readLine();
-
-            System.out.print("비밀번호: ");
-            String password = reader.readLine();
-
-            System.out.print("닉네임: ");
-            String nickname = reader.readLine();
+            String email = inputEmail();
+            String password = inputPassword();
+            String nickname = inputNickname();
 
             userService.register(email, password, nickname);
             System.out.println("회원가입 성공");
@@ -84,14 +85,63 @@ public class JoinAndLoginView {
         return false;
     }
 
+    // ===== 입력 메서드 =====
+
+    private String inputEmail() throws IOException {
+        while (true) {
+            System.out.print("이메일: ");
+            String email = reader.readLine();
+
+            try {
+                validateRequired(email, "이메일");
+                validateEmailFormat(email);
+                return email;
+            } catch (IllegalArgumentException e) {
+                System.out.println(e.getMessage());
+            }
+        }
+    }
+
+    private String inputPassword() throws IOException {
+        while (true) {
+            String password;
+
+            if (console != null) {
+                char[] pwChars = console.readPassword("비밀번호: ");
+                password = new String(pwChars);
+            } else {
+                // IDE에서는 console이 null일 수 있음
+                System.out.print("비밀번호: ");
+                password = reader.readLine();
+            }
+
+            try {
+                validateRequired(password, "비밀번호");
+                return password;
+            } catch (IllegalArgumentException e) {
+                System.out.println(e.getMessage());
+            }
+        }
+    }
+
+    private String inputNickname() throws IOException {
+        while (true) {
+            System.out.print("닉네임: ");
+            String nickname = reader.readLine();
+
+            try {
+                validateRequired(nickname, "닉네임");
+                return nickname;
+            } catch (IllegalArgumentException e) {
+                System.out.println(e.getMessage());
+            }
+        }
+    }
 
     public boolean login() {
         try {
-            System.out.print("Email 입력: ");
-            String email = reader.readLine();
-
-            System.out.print("비밀번호 입력: ");
-            String password = reader.readLine();
+            String email = inputEmail();
+            String password = inputPassword();
 
             return userService.login(email, password);
 
@@ -99,5 +149,21 @@ public class JoinAndLoginView {
             System.out.println(e.getMessage());
         }
         return false;
+    }
+
+
+    // ===== 유효성 메서드 =====
+
+    private void validateRequired(String value, String fieldName) {
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalArgumentException(fieldName + "은(는) 필수 입력입니다.");
+        }
+    }
+
+    private void validateEmailFormat(String email) {
+        String regex = "^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$";
+        if (!email.matches(regex)) {
+            throw new IllegalArgumentException("올바른 이메일 형식이 아닙니다.");
+        }
     }
 }
