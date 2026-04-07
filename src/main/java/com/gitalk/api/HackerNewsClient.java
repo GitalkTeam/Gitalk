@@ -12,6 +12,8 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 
 public class HackerNewsClient {
 
@@ -24,28 +26,24 @@ public class HackerNewsClient {
                 .build();
     }
 
-    /**
-     * HackerNews Top Stories 중 상위 count개를 가져옵니다.
-     */
     public List<NewsItem> fetchTopStories(int count) throws Exception {
         String idsJson = get(BASE_URL + "/topstories.json");
         JsonArray ids = JsonParser.parseString(idsJson).getAsJsonArray();
-
-        List<NewsItem> items = new ArrayList<>();
         int limit = Math.min(count, ids.size());
 
+        // 병렬 호출
+        List<CompletableFuture<NewsItem>> futures = new ArrayList<>();
         for (int i = 0; i < limit; i++) {
             int id = ids.get(i).getAsInt();
-            try {
-                NewsItem item = fetchItem(id);
-                if (item != null) {
-                    items.add(item);
-                }
-            } catch (Exception e) {
-                // 개별 아이템 실패 시 건너뜀
-            }
+            futures.add(CompletableFuture.supplyAsync(() -> {
+                try { return fetchItem(id); } catch (Exception e) { return null; }
+            }));
         }
-        return items;
+
+        return futures.stream()
+                .map(CompletableFuture::join)
+                .filter(Objects::nonNull)
+                .toList();
     }
 
     private NewsItem fetchItem(int id) throws Exception {
@@ -53,15 +51,13 @@ public class HackerNewsClient {
         if (json == null || json.equals("null")) return null;
 
         JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
-
-        String type = obj.has("type") ? obj.get("type").getAsString() : "";
-        if (!"story".equals(type)) return null;
+        if (!"story".equals(obj.has("type") ? obj.get("type").getAsString() : "")) return null;
 
         String title = obj.has("title") ? obj.get("title").getAsString() : "(제목 없음)";
-        String url = obj.has("url") ? obj.get("url").getAsString() : null;
-        int score = obj.has("score") ? obj.get("score").getAsInt() : 0;
-        String by = obj.has("by") ? obj.get("by").getAsString() : "unknown";
-        long time = obj.has("time") ? obj.get("time").getAsLong() : 0L;
+        String url   = obj.has("url")   ? obj.get("url").getAsString()   : null;
+        int score    = obj.has("score") ? obj.get("score").getAsInt()     : 0;
+        String by    = obj.has("by")    ? obj.get("by").getAsString()     : "unknown";
+        long time    = obj.has("time")  ? obj.get("time").getAsLong()     : 0L;
 
         return new NewsItem(id, title, url, score, by, time);
     }
@@ -72,8 +68,6 @@ public class HackerNewsClient {
                 .timeout(Duration.ofSeconds(10))
                 .GET()
                 .build();
-
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        return response.body();
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString()).body();
     }
 }
