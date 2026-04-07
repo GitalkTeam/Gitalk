@@ -1,0 +1,6 @@
+openai.api.key=YOUR_OPENAI_API_KEY
+openai.model=gpt-4o-mini
+
+github.token=YOUR_GITHUB_TOKEN
+
+webhook.server.port=8080
