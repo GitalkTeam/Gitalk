@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 setlocal enabledelayedexpansion
 
 set SRC_DIR=src\main\java
@@ -7,7 +8,7 @@ set OUT_DIR=out
 set LIB_DIR=lib
 
 if not exist "%LIB_DIR%" (
-    echo lib Æú´õ ¾øÀ½
+    echo lib í´ë” ì—†ìŒ
     exit /b 1
 )
 
@@ -21,10 +22,10 @@ for /R "%SRC_DIR%" %%f in (*.java) do (
 javac --release 21 -cp "%LIB_DIR%\*" -d "%OUT_DIR%" !SRC_FILES!
 
 if errorlevel 1 (
-    echo ÄÄÆÄÀÏ ½ÇÆÐ
+    echo ì»´íŒŒì¼ ì‹¤íŒ¨
     exit /b 1
 )
 
 xcopy "%RESOURCES_DIR%\*" "%OUT_DIR%\" /s /e /y >nul
 
-echo ÄÄÆÄÀÏ ¼º°ø
+echo ì»´íŒŒì¼ ì„±ê³µ
