@@ -34,15 +34,12 @@ public class GithubWebhookServer {
         server.createContext("/webhook", this::handleWebhook);
         server.setExecutor(Executors.newCachedThreadPool());
         server.start();
-        System.out.println("GitHub Webhook 서버 시작 (포트: " + port + ")");
-        System.out.println("GitHub 레포 → Settings → Webhooks 에 아래 URL 등록하세요:");
-        System.out.println("  http://<your-public-ip>:" + port + "/webhook");
     }
 
     public void stop() {
         if (server != null) {
             server.stop(0);
-            System.out.println("GitHub Webhook 서버 종료");
+            server = null;
         }
     }
 
