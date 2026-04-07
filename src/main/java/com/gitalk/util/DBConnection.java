@@ -1,17 +1,9 @@
 package com.gitalk.util;
 
-/**
- * DBConnection Description :
- * NOTE :
- *
- * @author jki
- * @since 04-07 (화) 오후 1:13
- */
-
+import java.io.InputStream;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.io.InputStream;
 import java.util.Properties;
 
 public class DBConnection {
@@ -47,9 +39,9 @@ public class DBConnection {
         try {
             Class.forName("com.mysql.cj.jdbc.Driver");
 
-            System.out.println("1. 데이터베이스 연결중 ...");
+            //System.out.println("1. 데이터베이스 연결중 ...");
             con = DriverManager.getConnection(URL, USER, PASSWORD);
-            System.out.println("1. 데이터베이스 연결 성공");
+            //.out.println("1. 데이터베이스 연결 성공");
 
         } catch (ClassNotFoundException e) {
             System.out.println("JDBC 드라이버를 찾지 못했습니다...");
