@@ -25,6 +25,9 @@ public class UserRepository {
                         .userid(rs.getLong("userid"))
                         .email(rs.getString("email"))
                         .password(rs.getString("password"))
+                        .nickname(rs.getString("nickname"))
+                        .profileUrl(rs.getString("profile_url"))
+                        .type(rs.getString("type"))
                         .build();
 
                 return Optional.of(user);

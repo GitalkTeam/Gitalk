@@ -8,6 +8,9 @@ import com.gitalk.domain.chatbot.service.NewsService;
 import com.gitalk.domain.chatbot.service.TrendingService;
 import com.gitalk.domain.chatbot.service.WebhookService;
 import com.gitalk.domain.chatbot.view.ChatBotView;
+import com.gitalk.domain.session.model.CurrentSessionContext;
+import com.gitalk.domain.session.model.Session;
+import com.gitalk.domain.session.service.SessionManager;
 import com.gitalk.domain.user.repository.UserRepository;
 import com.gitalk.domain.user.service.UserService;
 import com.gitalk.domain.user.view.JoinAndLoginView;
@@ -25,6 +28,7 @@ public class GitalkApplication {
     private static final ChatBotView chatView = new ChatBotView();
     private static final MainView mainView = new MainView();
     private static BufferedReader reader;
+    private static CurrentSessionContext currentSessionContext;
 
     public static void main(String[] args) throws Exception {
         Console console = System.console();
@@ -41,9 +45,26 @@ public class GitalkApplication {
 
         // 2. 로그인 / 회원가입
         UserRepository userRepository = new UserRepository();
-        UserService userService = new UserService(userRepository);
+        SessionManager sessionManager = new SessionManager(60);
+        UserService userService = new UserService(userRepository, sessionManager);
         JoinAndLoginView joinAndLoginView = new JoinAndLoginView(userService);
+
+        currentSessionContext = new CurrentSessionContext(sessionManager);
+
         joinAndLoginView.start();
+
+
+        // 전제:
+        // JoinAndLoginView 에 로그인 성공한 Session 을 꺼낼 수 있는 getter 가 있어야 함.
+        // 예) public Session getCurrentSession()
+        Session loginSession = joinAndLoginView.getCurrentSession();
+
+        if (loginSession == null) {
+            mainView.printError("로그인 세션을 찾을 수 없습니다.");
+            return;
+        }
+
+        currentSessionContext.set(loginSession);
 
         // 3. 챗봇 진입
         mainView.clearScreen();
@@ -66,18 +87,19 @@ public class GitalkApplication {
                         .replaceAll("\\p{Z}", " ")
                         .trim();
                 if (input.isEmpty()) continue;
-                if ("exit".equalsIgnoreCase(input)) { mainView.printExit(); System.exit(0); }
+                if ("exit".equalsIgnoreCase(input)) { handleLogout(); }
 
                 handleCommand(input);
 
             } catch (RuntimeException e) {
                 if (e.getClass().getSimpleName().equals("UserInterruptException")) {
-                    mainView.printExit();
-                    System.exit(0);
+                    handleLogout();
                 }
                 mainView.printError(e.getMessage());
             }
         }
+
+        logoutIfNeeded();
     }
 
     // ── 라우팅 ─────────────────────────────────────────────────────────────
@@ -155,6 +177,20 @@ public class GitalkApplication {
             case "stop"  -> { webhookService.stop(); chatView.printWebhookStopped(); }
             case "list"  -> chatView.printWebhookEvents(webhookService.getEvents());
             default      -> System.out.println("사용법: webhook start | webhook stop | webhook list");
+        }
+    }
+
+    // ── 로그아웃 ───────────────────────────────────────────────────────────
+
+    private static void handleLogout() {
+        logoutIfNeeded();
+        mainView.printExit();
+        System.exit(0);
+    }
+
+    private static void logoutIfNeeded() {
+        if (currentSessionContext != null && currentSessionContext.isLoggedIn()) {
+            currentSessionContext.logout();
         }
     }
 

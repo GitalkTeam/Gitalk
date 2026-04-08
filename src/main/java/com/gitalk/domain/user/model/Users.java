@@ -37,7 +37,7 @@ public class Users {
     }
 
     // Getter
-    public Long getUserId() { return userid; }
+    public Long getUserid() { return userid; }
     public String getEmail() { return email; }
     public String getPassword() { return password; }
     public String getNickname() { return nickname; }

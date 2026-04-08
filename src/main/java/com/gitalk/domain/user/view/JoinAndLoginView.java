@@ -3,10 +3,13 @@ package com.gitalk.domain.user.view;
 /**
  * JoinAndLoginView Description :
  * NOTE :
- *
+ * 이메일/비밀번호 입력 받기
+ * 메뉴 출력
+ * 결과 메시지 출력
  * @author jki
  * @since 04-07 (화) 오후 3:00
  */
+import com.gitalk.domain.session.model.Session;
 import com.gitalk.domain.user.service.UserService;
 
 import java.io.BufferedReader;
@@ -20,7 +23,7 @@ public class JoinAndLoginView {
     private final UserService userService;
     private final BufferedReader reader;
     private final Console console;
-
+    private Session currentSession;
     public JoinAndLoginView(UserService userService) {
         this.userService = userService;
         this.reader = new BufferedReader(new InputStreamReader(System.in));
@@ -40,13 +43,12 @@ public class JoinAndLoginView {
 
                 switch (input) {
                     case "1":
-                        if (login()) {
-                            break outer; // while 탈출
-                        } else {
-                            System.out.println("로그인 실패");
+                        Session session = login();
+                        if (session != null) {
+                            this.currentSession = session;
+                            break outer;
                         }
                         break;
-
                     case "2":
                         if (signUp()) {
                             break outer; // while 탈출
@@ -140,19 +142,20 @@ public class JoinAndLoginView {
         }
     }
 
-    public boolean login() {
+    public Session login() {
         try {
             String email = inputEmail();
             String password = inputPassword();
-
             return userService.login(email, password);
-
         } catch (Exception e) {
             System.out.println(e.getMessage());
+            return null;
         }
-        return false;
     }
 
+    public Session getCurrentSession() {
+        return currentSession;
+    }
 
     // ===== 유효성 메서드 =====
 

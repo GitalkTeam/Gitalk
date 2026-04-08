@@ -1,5 +1,7 @@
 package com.gitalk.domain.user.service;
 
+import com.gitalk.domain.session.model.Session;
+import com.gitalk.domain.session.service.SessionManager;
 import com.gitalk.domain.user.model.Users;
 import com.gitalk.domain.user.repository.UserRepository;
 
@@ -11,26 +13,24 @@ import com.gitalk.domain.user.repository.UserRepository;
  * @since 04-07 (화) 오후 2:47
  */
 public class UserService {
-
     private final UserRepository userRepository;
+    private final SessionManager sessionManager;
 
-    public UserService(UserRepository userRepository) {
+    public UserService(UserRepository userRepository, SessionManager sessionManager) {
         this.userRepository = userRepository;
+        this.sessionManager = sessionManager;
     }
 
-
-    public boolean login(String email, String password) {
-
+    public Session login(String email, String password) {
         Users user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("로그인 및 비밀번호가 잘못되었습니다."));
+                .orElseThrow(() -> new RuntimeException("이메일 또는 비밀번호가 잘못되었습니다."));
 
         if (!user.getPassword().equals(encrypt(password))) {
-            throw new RuntimeException("로그인 및 비밀번호가 잘못되었습니다.");
+            throw new RuntimeException("이메일 또는 비밀번호가 잘못되었습니다.");
         }
 
-        return true;
+        return sessionManager.createSession(user);
     }
-
 
     public void register(String email, String password, String nickname) {
 
