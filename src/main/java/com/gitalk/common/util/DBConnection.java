@@ -1,4 +1,4 @@
-package com.gitalk.util;
+package com.gitalk.common.util;
 
 import java.io.InputStream;
 import java.sql.Connection;

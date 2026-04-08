@@ -1,4 +1,4 @@
-package com.gitalk.model;
+package com.gitalk.domain.chatbot.model;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;

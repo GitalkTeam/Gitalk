@@ -1,6 +1,7 @@
-package com.gitalk.user;
+package com.gitalk.domain.user.repository;
 
-import com.gitalk.util.DBConnection;
+import com.gitalk.domain.user.model.Users;
+import com.gitalk.common.util.DBConnection;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;

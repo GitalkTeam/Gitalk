@@ -1,4 +1,4 @@
-package com.gitalk.user;
+package com.gitalk.domain.user.view;
 
 /**
  * JoinAndLoginView Description :
@@ -7,6 +7,8 @@ package com.gitalk.user;
  * @author jki
  * @since 04-07 (화) 오후 3:00
  */
+import com.gitalk.domain.user.service.UserService;
+
 import java.io.BufferedReader;
 import java.io.Console;
 import java.io.InputStreamReader;

@@ -1,4 +1,7 @@
-package com.gitalk.user;
+package com.gitalk.domain.user.service;
+
+import com.gitalk.domain.user.model.Users;
+import com.gitalk.domain.user.repository.UserRepository;
 
 /**
  * UserService Description :

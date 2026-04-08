@@ -1,4 +1,4 @@
-package com.gitalk.util;
+package com.gitalk.common.util;
 
 import java.io.IOException;
 import java.io.InputStream;

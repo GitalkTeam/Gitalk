@@ -1,37 +1,54 @@
 package com.gitalk;
 
-import com.gitalk.chatbot.ChatBot;
-import com.gitalk.user.JoinAndLoginView;
-import com.gitalk.user.UserRepository;
-import com.gitalk.user.UserService;
+import com.gitalk.common.util.AppConfig;
+import com.gitalk.common.view.MainView;
+import com.gitalk.domain.chatbot.model.NewsItem;
+import com.gitalk.domain.chatbot.model.TrendingRepo;
+import com.gitalk.domain.chatbot.service.NewsService;
+import com.gitalk.domain.chatbot.service.TrendingService;
+import com.gitalk.domain.chatbot.service.WebhookService;
+import com.gitalk.domain.chatbot.view.ChatBotView;
+import com.gitalk.domain.user.repository.UserRepository;
+import com.gitalk.domain.user.service.UserService;
+import com.gitalk.domain.user.view.JoinAndLoginView;
 
 import java.io.BufferedReader;
 import java.io.Console;
 import java.io.InputStreamReader;
+import java.util.List;
 
 public class GitalkApplication {
 
-    public static void main(String[] args) throws Exception {
-        System.out.println("\nGitalk - 개발자를 위한 CLI 챗봇\n");
+    private static final TrendingService trendingService = new TrendingService();
+    private static final NewsService newsService = new NewsService();
+    private static final WebhookService webhookService = new WebhookService();
+    private static final ChatBotView chatView = new ChatBotView();
+    private static final MainView mainView = new MainView();
+    private static BufferedReader reader;
 
-        // 1. 의존성 생성
+    public static void main(String[] args) throws Exception {
+        Console console = System.console();
+        reader = new BufferedReader(new InputStreamReader(System.in));
+
+        // 1. 배너 + 메인 메뉴
+        mainView.printBanner();
+        String menuInput = reader.readLine();
+        if (menuInput == null) return;
+        String menuChoice = menuInput.replaceAll("[\\p{Cntrl}\\uFEFF]", "").trim();
+
+        if ("2".equals(menuChoice)) { mainView.printExit(); return; }
+        if (!"1".equals(menuChoice)) return;
+
+        // 2. 로그인 / 회원가입
         UserRepository userRepository = new UserRepository();
         UserService userService = new UserService(userRepository);
         JoinAndLoginView joinAndLoginView = new JoinAndLoginView(userService);
-
-        // 2. 프로그램 시작
         joinAndLoginView.start();
 
-
-        Console console = System.console();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
-        ChatBot chatBot = new ChatBot(reader);
-        chatBot.printHelp();
-
-        if (console == null) {
-            System.out.println("[주의] 터미널이 감지되지 않았습니다. 백스페이스 이슈가 발생할 수 있습니다.");
-            System.out.println("       ./run.sh 로 외부 터미널에서 실행하세요.\n");
-        }
+        // 3. 챗봇 진입
+        mainView.clearScreen();
+        if (console == null) mainView.printTerminalWarning();
+        chatView.printHelp();
 
         while (true) {
             try {
@@ -49,21 +66,113 @@ public class GitalkApplication {
                         .replaceAll("\\p{Z}", " ")
                         .trim();
                 if (input.isEmpty()) continue;
-                if ("exit".equalsIgnoreCase(input)) {
-                    System.out.println("Gitalk을 종료합니다.");
-                    System.exit(0);
-                }
+                if ("exit".equalsIgnoreCase(input)) { mainView.printExit(); System.exit(0); }
 
-                chatBot.handleCommand(input);
+                handleCommand(input);
 
             } catch (RuntimeException e) {
-                // Ctrl+C (UserInterruptException) 처리
                 if (e.getClass().getSimpleName().equals("UserInterruptException")) {
-                    System.out.println("\nGitalk을 종료합니다.");
+                    mainView.printExit();
                     System.exit(0);
                 }
-                System.err.println("오류: " + e.getMessage());
+                mainView.printError(e.getMessage());
             }
+        }
+    }
+
+    // ── 라우팅 ─────────────────────────────────────────────────────────────
+
+    private static void handleCommand(String input) {
+        String[] parts = input.trim().split("[\\s\\p{Z}]+", 2);
+        String command = parts[0].toLowerCase();
+        switch (command) {
+            case "trend"   -> { handleTrend(parts.length > 1 ? parts[1].trim() : null); chatView.printCommandHint(); }
+            case "news"    -> { handleNews(); chatView.printCommandHint(); }
+            case "webhook" -> { handleWebhook(parts.length > 1 ? parts[1].toLowerCase() : ""); chatView.printCommandHint(); }
+            case "help"    -> chatView.printHelp();
+            default        -> System.out.println("알 수 없는 명령어입니다. 'help' 를 입력하세요.");
+        }
+    }
+
+    // ── 기능 1: GitHub Trending ────────────────────────────────────────────
+
+    private static void handleTrend(String filter) {
+        try {
+            List<TrendingRepo> repos = trendingService.fetchTrending(filter);
+            if (repos.isEmpty()) { System.out.println("트렌딩 데이터를 가져오지 못했습니다."); return; }
+
+            String[] descriptions = trendingService.translateDescriptions(repos);
+            chatView.printTrendingList(repos, descriptions, TrendingService.filterDesc(filter));
+
+            int choice = readChoice(repos.size());
+            if (choice == 0) return;
+
+            String analysis = trendingService.analyzeRepo(repos.get(choice - 1));
+            chatView.printTrendingAnalysis(repos.get(choice - 1), analysis);
+
+        } catch (Exception e) {
+            chatView.printError("트렌딩 조회 실패: " + e.getMessage());
+        }
+    }
+
+    // ── 기능 2: HackerNews ─────────────────────────────────────────────────
+
+    private static void handleNews() {
+        try {
+            List<NewsItem> items = newsService.fetchTopStories();
+            if (items.isEmpty()) { System.out.println("뉴스를 가져오지 못했습니다."); return; }
+
+            String[] titles  = newsService.translateTitles(items);
+            String[] times   = items.stream().map(i -> newsService.relativeTime(i.time())).toArray(String[]::new);
+            String[] domains = items.stream().map(i -> newsService.domain(i.url())).toArray(String[]::new);
+            chatView.printNewsList(items, titles, times, domains);
+
+            int choice = readChoice(items.size());
+            if (choice == 0) return;
+
+            String summary = newsService.summarizeArticle(items.get(choice - 1));
+            chatView.printNewsSummary(items.get(choice - 1), titles[choice - 1], summary);
+
+        } catch (Exception e) {
+            chatView.printError("뉴스 조회 실패: " + e.getMessage());
+        }
+    }
+
+    // ── 기능 3: Webhook ────────────────────────────────────────────────────
+
+    private static void handleWebhook(String sub) {
+        switch (sub) {
+            case "start" -> {
+                if (webhookService.isRunning()) { System.out.println("\n 웹훅 서버가 이미 실행 중입니다.\n"); return; }
+                try {
+                    webhookService.start(chatView::printWebhookEventAlert);
+                    int port = Integer.parseInt(AppConfig.get("webhook.server.port"));
+                    chatView.printWebhookStarted(port);
+                } catch (Exception e) {
+                    chatView.printError("웹훅 서버 시작 실패: " + e.getMessage());
+                }
+            }
+            case "stop"  -> { webhookService.stop(); chatView.printWebhookStopped(); }
+            case "list"  -> chatView.printWebhookEvents(webhookService.getEvents());
+            default      -> System.out.println("사용법: webhook start | webhook stop | webhook list");
+        }
+    }
+
+    // ── 사용자 입력 ────────────────────────────────────────────────────────
+
+    private static int readChoice(int max) {
+        try {
+            System.out.print(" 번호 선택 (0: 취소) > ");
+            System.out.flush();
+            String line = reader.readLine();
+            if (line == null) return 0;
+            int choice = Integer.parseInt(line.replaceAll("[\\p{Cntrl}\\uFEFF]", "").trim());
+            return (choice < 0 || choice > max) ? 0 : choice;
+        } catch (NumberFormatException e) {
+            System.out.println("올바른 번호를 입력해주세요.");
+            return 0;
+        } catch (Exception e) {
+            return 0;
         }
     }
 }

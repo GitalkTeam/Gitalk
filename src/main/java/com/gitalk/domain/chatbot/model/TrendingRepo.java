@@ -1,4 +1,4 @@
-package com.gitalk.model;
+package com.gitalk.domain.chatbot.model;
 
 public record TrendingRepo(
         String fullName,

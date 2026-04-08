@@ -1,4 +1,4 @@
-package com.gitalk.user;
+package com.gitalk.domain.user.model;
 
 /**
  * users Description :

@@ -1,7 +1,7 @@
-package com.gitalk.api;
+package com.gitalk.common.api;
 
-import com.gitalk.model.TrendingRepo;
-import com.gitalk.util.AppConfig;
+import com.gitalk.domain.chatbot.model.TrendingRepo;
+import com.gitalk.common.util.AppConfig;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;

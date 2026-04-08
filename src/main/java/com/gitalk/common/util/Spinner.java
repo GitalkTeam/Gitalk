@@ -1,4 +1,4 @@
-package com.gitalk.util;
+package com.gitalk.common.util;
 
 public class Spinner {
 

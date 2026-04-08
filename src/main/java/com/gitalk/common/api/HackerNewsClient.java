@@ -1,6 +1,6 @@
-package com.gitalk.api;
+package com.gitalk.common.api;
 
-import com.gitalk.model.NewsItem;
+import com.gitalk.domain.chatbot.model.NewsItem;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;

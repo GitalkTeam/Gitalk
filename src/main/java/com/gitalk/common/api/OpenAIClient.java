@@ -1,6 +1,6 @@
-package com.gitalk.api;
+package com.gitalk.common.api;
 
-import com.gitalk.util.AppConfig;
+import com.gitalk.common.util.AppConfig;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
