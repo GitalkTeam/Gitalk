@@ -1,91 +1,60 @@
 package com.gitalk.domain.user.model;
 
-/**
- * users Description :
- * NOTE :
- *
- * @author jki
- * @since 04-07 (화) 오후 2:39
- */
 public class Users {
     private Long userid;
+    private Long githubId;
     private String email;
     private String password;
     private String nickname;
     private String profileUrl;
     private String type;
+    private String authAccessToken;
 
-    // getter / setter
-
-    public Users(Long userid, String email, String password, String nickname, String profileUrl, String type) {
-        this.userid = userid;
-        this.email = email;
-        this.password = password;
-        this.nickname = nickname;
-        this.profileUrl = profileUrl;
-        this.type = type;
-    }
-
-    // 기본 생성자 (외부에서 직접 생성 방지)
     private Users(Builder builder) {
         this.userid = builder.userid;
+        this.githubId = builder.githubId;
         this.email = builder.email;
         this.password = builder.password;
         this.nickname = builder.nickname;
         this.profileUrl = builder.profileUrl;
         this.type = builder.type;
+        this.authAccessToken = builder.authAccessToken;
     }
 
-    // Getter
     public Long getUserId() { return userid; }
+    public Long getGithubId() { return githubId; }
     public String getEmail() { return email; }
     public String getPassword() { return password; }
     public String getNickname() { return nickname; }
     public String getProfileUrl() { return profileUrl; }
     public String getType() { return type; }
+    public String getAuthAccessToken() { return authAccessToken; }
 
-    // Builder
     public static class Builder {
         private Long userid;
+        private Long githubId;
         private String email;
         private String password;
         private String nickname;
         private String profileUrl;
         private String type;
+        private String authAccessToken;
 
-        public Builder email(String email) {
-            this.email = email;
-            return this;
-        }
-
-        public Builder password(String password) {
-            this.password = password;
-            return this;
-        }
-
-        public Builder nickname(String nickname) {
-            this.nickname = nickname;
-            return this;
-        }
-
-        public Builder profileUrl(String profileUrl) {
-            this.profileUrl = profileUrl;
-            return this;
-        }
-
-        public Builder type(String type) {
-            this.type = type;
-            return this;
-        }
-
-        public Builder userid(Long userid) {
-            this.userid = userid;
-            return this;
-        }
+        public Builder userid(Long userid) { this.userid = userid; return this; }
+        public Builder githubId(Long githubId) { this.githubId = githubId; return this; }
+        public Builder email(String email) { this.email = email; return this; }
+        public Builder password(String password) { this.password = password; return this; }
+        public Builder nickname(String nickname) { this.nickname = nickname; return this; }
+        public Builder profileUrl(String profileUrl) { this.profileUrl = profileUrl; return this; }
+        public Builder type(String type) { this.type = type; return this; }
+        public Builder authAccessToken(String authAccessToken) { this.authAccessToken = authAccessToken; return this; }
 
         public Users build() {
-            if (email == null || password == null) {
-                throw new IllegalStateException("email과 password는 필수입니다.");
+            if (email == null || email.isBlank()) {
+                throw new IllegalStateException("email은 필수입니다.");
+            }
+            if (type == null || type.isBlank()) {
+                throw new IllegalStateException("type은 필수입니다.");
             }
             return new Users(this);
         }

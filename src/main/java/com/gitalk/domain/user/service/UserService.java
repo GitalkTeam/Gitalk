@@ -3,6 +3,8 @@ package com.gitalk.domain.user.service;
 import com.gitalk.domain.user.model.Users;
 import com.gitalk.domain.user.repository.UserRepository;
 
+import java.security.MessageDigest;
+
 /**
  * UserService Description :
  * NOTE :
@@ -18,31 +20,29 @@ public class UserService {
         this.userRepository = userRepository;
     }
 
-
-    public boolean login(String email, String password) {
-
+    public Users login(String email, String password) {
         Users user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("로그인 및 비밀번호가 잘못되었습니다."));
+                .orElseThrow(() -> new RuntimeException("로그인 정보가 올바르지 않습니다."));
 
-        if (!user.getPassword().equals(encrypt(password))) {
-            throw new RuntimeException("로그인 및 비밀번호가 잘못되었습니다.");
+        if (!"LOCAL".equals(user.getType())) {
+            throw new RuntimeException("GitHub 회원입니다. GitHub 로그인을 사용하세요.");
         }
 
-        return true;
+        if (user.getPassword() == null || !user.getPassword().equals(encrypt(password))) {
+            throw new RuntimeException("로그인 정보가 올바르지 않습니다.");
+        }
+
+        return user;
     }
 
-
     public void register(String email, String password, String nickname) {
-
         if (userRepository.existsByEmail(email)) {
             throw new IllegalArgumentException("이미 존재하는 이메일입니다.");
         }
 
-        String encryptedPassword = encrypt(password);
-
         Users user = new Users.Builder()
                 .email(email)
-                .password(encryptedPassword)
+                .password(encrypt(password))
                 .nickname(nickname)
                 .type("LOCAL")
                 .build();
@@ -52,7 +52,7 @@ public class UserService {
 
     private String encrypt(String password) {
         try {
-            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] hashed = md.digest(password.getBytes());
             StringBuilder sb = new StringBuilder();
             for (byte b : hashed) {
