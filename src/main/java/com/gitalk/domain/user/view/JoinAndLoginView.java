@@ -7,65 +7,122 @@ package com.gitalk.domain.user.view;
  * @author jki
  * @since 04-07 (화) 오후 3:00
  */
+import com.gitalk.domain.oauth.github.model.GithubDeviceCode;
+import com.gitalk.domain.oauth.github.service.GithubAuthService;
+import com.gitalk.domain.user.model.Users;
 import com.gitalk.domain.user.service.UserService;
+import com.gitalk.domain.oauth.github.exception.GithubAuthorizationPendingException;
 
 import java.io.BufferedReader;
 import java.io.Console;
-import java.io.InputStreamReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 
 public class JoinAndLoginView {
 
-
     private final UserService userService;
+    private final GithubAuthService githubAuthService;
     private final BufferedReader reader;
     private final Console console;
 
-    public JoinAndLoginView(UserService userService) {
+    public JoinAndLoginView(UserService userService, GithubAuthService githubAuthService) {
         this.userService = userService;
+        this.githubAuthService = githubAuthService;
         this.reader = new BufferedReader(new InputStreamReader(System.in));
         this.console = System.console();
     }
 
-    public void start() {
-        outer:
+    public Users start() {
+        Users user;
         while (true) {
             try {
-                System.out.println("────────────────────────────────────────────────────────────────────");
-                System.out.println("   1. 로그인                      2. 회원가입");
-                System.out.println("────────────────────────────────────────────────────────────────────");
+                System.out.println("────────────────────────────────────────");
+                System.out.println("1. 로컬 로그인   2. GitHub 로그인   3. 회원가입   ");
+                System.out.println("────────────────────────────────────────");
                 System.out.print("선택: ");
 
                 String input = reader.readLine();
 
                 switch (input) {
                     case "1":
-                        if (login()) {
-                            break outer; // while 탈출
-                        } else {
-                            System.out.println("로그인 실패");
+                        user = login();
+                        if (user != null) {
+                            return user;
                         }
                         break;
-
                     case "2":
-                        if (signUp()) {
-                            break outer; // while 탈출
+                        user = githubLogin();
+                        if (user != null) {
+                            return user;
                         }
                         break;
-
+                    case "3":
+                        boolean signUpSuccess = signUp();
+                        if (signUpSuccess) {
+                            System.out.println("\n로그인을 진행해주세요.");
+                            user = login();
+                            if (user != null) {
+                                return user;
+                            }
+                        }
+                        break;
                     default:
                         System.out.println("잘못된 입력");
                 }
-
-            } catch (IOException e) {
-                System.out.println("입력 오류 발생");
+            } catch (Exception e) {
+                System.out.println("처리 실패: " + e.getMessage());
             }
         }
     }
 
+    private Users githubLogin() {
+        try {
+            GithubDeviceCode deviceCode = githubAuthService.requestDeviceCode();
 
-    public boolean signUp() {
+            System.out.println("\n[ GitHub 로그인 ]");
+            System.out.println("1. 아래 URL로 이동");
+            System.out.println("2. 아래 코드를 입력");
+            System.out.println("3. GitHub에서 승인");
+            System.out.println();
+            System.out.println("URL  : " + deviceCode.getVerificationUri());
+            System.out.println("CODE : " + deviceCode.getUserCode());
+            System.out.println();
 
+            int maxRetry = 5;
+
+            for (int attempt = 1; attempt <= maxRetry; attempt++) {
+                System.out.print("승인 완료 후 Enter > ");
+                reader.readLine();
+
+                try {
+                    String accessToken = githubAuthService.requestAccessTokenOnce(deviceCode);
+                    Users user = githubAuthService.loginOrRegisterByAccessToken(accessToken);
+                    System.out.println("GitHub 로그인 성공: " + user.getNickname());
+                    return user;
+
+                } catch (GithubAuthorizationPendingException e) {
+                    System.out.println("아직 GitHub 승인이 완료되지 않았습니다. (" + attempt + "/" + maxRetry + ")");
+                }
+            }
+
+            System.out.println("GitHub 승인 확인 횟수를 초과했습니다. 처음 화면으로 이동합니다.");
+            return null;
+
+        } catch (Exception e) {
+            System.out.println("GitHub 로그인 실패: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private Users login() throws IOException {
+        String email = inputEmail();
+        String password = inputPassword();
+        Users user = userService.login(email, password);
+        System.out.println("로그인 성공");
+        return user;
+    }
+
+    private boolean signUp() throws IOException {
         try {
             System.out.println("\n [ 회원가입 ]");
 
@@ -139,20 +196,6 @@ public class JoinAndLoginView {
             }
         }
     }
-
-    public boolean login() {
-        try {
-            String email = inputEmail();
-            String password = inputPassword();
-
-            return userService.login(email, password);
-
-        } catch (Exception e) {
-            System.out.println(e.getMessage());
-        }
-        return false;
-    }
-
 
     // ===== 유효성 메서드 =====
 

@@ -8,6 +8,9 @@ import com.gitalk.domain.chatbot.service.NewsService;
 import com.gitalk.domain.chatbot.service.TrendingService;
 import com.gitalk.domain.chatbot.service.WebhookService;
 import com.gitalk.domain.chatbot.view.ChatBotView;
+import com.gitalk.domain.oauth.github.service.GithubAuthService;
+import com.gitalk.domain.oauth.github.service.GithubOauthClient;
+import com.gitalk.domain.user.model.Users;
 import com.gitalk.domain.user.repository.UserRepository;
 import com.gitalk.domain.user.service.UserService;
 import com.gitalk.domain.user.view.JoinAndLoginView;
@@ -42,8 +45,10 @@ public class GitalkApplication {
         // 2. 로그인 / 회원가입
         UserRepository userRepository = new UserRepository();
         UserService userService = new UserService(userRepository);
-        JoinAndLoginView joinAndLoginView = new JoinAndLoginView(userService);
-        joinAndLoginView.start();
+        GithubOauthClient githubOauthClient = new GithubOauthClient();
+        GithubAuthService githubAuthService = new GithubAuthService(userRepository, githubOauthClient);
+        JoinAndLoginView joinAndLoginView = new JoinAndLoginView(userService, githubAuthService);
+        Users loginUser = joinAndLoginView.start();
 
         // 3. 챗봇 진입
         mainView.clearScreen();
