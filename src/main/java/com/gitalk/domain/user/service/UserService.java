@@ -4,6 +4,7 @@ import com.gitalk.domain.user.model.Users;
 import com.gitalk.domain.user.repository.UserRepository;
 
 import java.security.MessageDigest;
+import java.util.Optional;
 
 /**
  * UserService Description :
@@ -18,6 +19,10 @@ public class UserService {
 
     public UserService(UserRepository userRepository) {
         this.userRepository = userRepository;
+    }
+
+    public Optional<Users> findByEmail(String email) {
+        return userRepository.findByEmail(email);
     }
 
     public Users login(String email, String password) {

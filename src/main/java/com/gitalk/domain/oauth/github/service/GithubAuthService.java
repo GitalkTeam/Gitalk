@@ -4,6 +4,8 @@ import com.gitalk.domain.oauth.github.model.GithubUserInfo;
 import com.gitalk.domain.user.model.Users;
 import com.gitalk.domain.user.repository.UserRepository;
 
+import java.util.Optional;
+
 /**
  * GithubAuthService Description :
  * NOTE :
@@ -32,15 +34,34 @@ public class GithubAuthService {
     public Users loginOrRegisterByAccessToken(String accessToken) {
         GithubUserInfo githubUser = githubOauthClient.fetchGithubUser(accessToken);
 
+        // 1. 이미 GitHub 연동된 사용자 → 즉시 로그인
+        Optional<Users> byGithubId = userRepository.findByGithubId(githubUser.getId());
+        if (byGithubId.isPresent()) {
+            return byGithubId.get();
+        }
+
+        // 2. 같은 이메일의 로컬 계정이 존재 → 자동 연동 후 로그인
+        Optional<Users> byEmail = userRepository.findByEmail(githubUser.getEmail());
+        if (byEmail.isPresent()) {
+            return linkGithubToExisting(byEmail.get(), githubUser, accessToken);
+        }
+
+        // 3. 완전 신규 → GitHub 회원으로 등록
+        return registerGithubUser(githubUser, accessToken);
+    }
+
+    private Users linkGithubToExisting(Users existing, GithubUserInfo githubUser, String accessToken) {
+        userRepository.linkGithub(
+                existing.getUserId(),
+                githubUser.getId(),
+                accessToken,
+                githubUser.getAvatarUrl()
+        );
         return userRepository.findByGithubId(githubUser.getId())
-                .orElseGet(() -> registerGithubUser(githubUser, accessToken));
+                .orElseThrow(() -> new RuntimeException("GitHub 연동 후 조회 실패"));
     }
 
     private Users registerGithubUser(GithubUserInfo githubUser, String accessToken) {
-        if (userRepository.existsByEmail(githubUser.getEmail())) {
-            throw new RuntimeException("이미 같은 이메일의 계정이 존재합니다.");
-        }
-
         Users user = new Users.Builder()
                 .githubId(githubUser.getId())
                 .email(githubUser.getEmail())

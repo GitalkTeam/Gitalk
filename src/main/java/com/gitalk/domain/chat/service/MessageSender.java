@@ -1,4 +1,4 @@
-package com.gitalk.chat.service;
+package com.gitalk.domain.chat.service;
 
 /**
  * 메시지 송신 인터페이스
@@ -6,10 +6,7 @@ package com.gitalk.chat.service;
  * 나중에 WebSocket, SSE 등 다른 전송 방식으로 교체 가능
  */
 public interface MessageSender {
-
     void sendRaw(String rawMessage);
-
     String getNickname();
-
     boolean isAuthenticated();
 }

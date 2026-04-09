@@ -1,10 +1,10 @@
-package com.gitalk.chat.repository;
+package com.gitalk.domain.chat.repository;
 
-import com.gitalk.chat.domain.Message;
+import com.gitalk.domain.chat.domain.Message;
 
 import java.util.List;
 
-public interface ChatRepository {
-    void saveMessage(Message message);
-    List<Message> findByRoomId(String roomId);
+/** @deprecated MessageRepository 로 대체됨 */
+@Deprecated
+public interface ChatRepository extends MessageRepository {
 }

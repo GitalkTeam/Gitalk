@@ -5,10 +5,16 @@ public class Spinner {
     private static final String[] FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
     private static final boolean IS_TERMINAL = System.console() != null;
 
+    /** 채팅방 모드 등에서 스크린 레이아웃을 깨지 않도록 전역 억제 */
+    private static volatile boolean suppressed = false;
+
+    public static void setSuppressed(boolean value) { suppressed = value; }
+
     private Thread thread;
     private volatile boolean running;
 
     public void start(String message) {
+        if (suppressed) return;
         if (IS_TERMINAL) {
             running = true;
             thread = new Thread(() -> {
@@ -30,6 +36,7 @@ public class Spinner {
     }
 
     public void stop() {
+        if (suppressed) return;
         if (IS_TERMINAL) {
             running = false;
             try { thread.join(500); } catch (InterruptedException ignored) {}

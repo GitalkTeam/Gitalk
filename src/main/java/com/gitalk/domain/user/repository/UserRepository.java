@@ -63,6 +63,35 @@ public class UserRepository {
         return false;
     }
 
+    // 기존 로컬 계정에 GitHub 정보 연동 (이메일 일치 시 자동 링크)
+    public void linkGithub(Long userId, Long githubId, String accessToken, String profileUrl) {
+        String sql = """
+            UPDATE users
+               SET github_id         = ?,
+                   auth_access_token = ?,
+                   profile_url       = COALESCE(?, profile_url)
+             WHERE userid = ?
+            """;
+
+        try (Connection conn = DBConnection.makeConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+            pstmt.setLong(1, githubId);
+            pstmt.setString(2, accessToken);
+            if (profileUrl != null) {
+                pstmt.setString(3, profileUrl);
+            } else {
+                pstmt.setNull(3, java.sql.Types.VARCHAR);
+            }
+            pstmt.setLong(4, userId);
+
+            pstmt.executeUpdate();
+
+        } catch (SQLException e) {
+            throw new RuntimeException("GitHub 연동 실패", e);
+        }
+    }
+
     // 회원 저장
 
     public void save(Users user) {
