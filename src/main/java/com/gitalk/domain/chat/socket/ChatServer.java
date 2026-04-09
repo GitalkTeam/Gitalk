@@ -1,9 +1,10 @@
 package com.gitalk.domain.chat.socket;
 
 import com.gitalk.common.api.ImageAsciiHttpServer;
-import com.gitalk.domain.chat.repository.InMemoryChatRepository;
-import com.gitalk.domain.chat.repository.MessageRepositoryImpl;
+import com.gitalk.domain.chat.config.MongoConnectionManager;
+import com.gitalk.domain.chat.repository.*;
 import com.gitalk.domain.chat.service.ChatService;
+import com.gitalk.domain.chat.search.service.SearchShareService;
 
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -15,10 +16,12 @@ public class ChatServer {
 
     private final int port;
     private final ChatService chatService;
+    private final SearchShareService searchShareService;
 
-    public ChatServer(int port, ChatService chatService) {
+    public ChatServer(int port, ChatService chatService, SearchShareService searchShareService) {
         this.port = port;
         this.chatService = chatService;
+        this.searchShareService = searchShareService;
     }
 
     public void start() throws IOException {
@@ -34,15 +37,24 @@ public class ChatServer {
             while (true) {
                 Socket socket = serverSocket.accept();
                 System.out.println("[연결] 클라이언트: " + socket.getInetAddress().getHostAddress());
-                ClientHandler handler = new ClientHandler(socket, chatService);
+                ClientHandler handler = new ClientHandler(socket, chatService, searchShareService);
                 handler.start();
             }
         }
     }
 
     public static void main(String[] args) throws IOException {
+        MongoConnectionManager connectionManager = MongoConnectionManager.getInstance();
+
+        MongoChatMessageRepository messageRepository = new MongoChatMessageRepository(connectionManager);
+        messageRepository.createIndexes();
+
         // DB 연동: MessageRepositoryImpl / 로컬 테스트: InMemoryChatRepository
-        ChatService chatService = new ChatService(new MessageRepositoryImpl());
-        new ChatServer(PORT, chatService).start();
+        // Primary runtime storage uses Mongo; swap in another MessageRepository
+        // implementation only for local fallback or storage migration work.
+        ChatService chatService = new ChatService(messageRepository);
+        SearchShareService searchShareService = new SearchShareService();
+        Runtime.getRuntime().addShutdownHook(new Thread(connectionManager::close));
+        new ChatServer(PORT, chatService, searchShareService).start();
     }
 }

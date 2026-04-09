@@ -19,9 +19,29 @@ services:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
 
     command:
-      --default-authentication-plugin=mysql_native_password
-      --character-set-server=utf8mb4
-      --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+
+  mongodb:
+    image: mongo:8.0
+    container_name: mongodb-container
+    restart: always
+
+    ports:
+      - "27017:27017"
+
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mongo_root
+      MONGO_INITDB_ROOT_PASSWORD: 1111
+      TZ: Asia/Seoul
+
+    volumes:
+      - mongo-data:/data/db
+
+    command:
+      - --quiet
 
 volumes:
   mysql-data:
+  mongo-data:

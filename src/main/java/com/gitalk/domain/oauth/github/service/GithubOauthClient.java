@@ -17,8 +17,8 @@ import com.gitalk.domain.oauth.github.model.GithubDeviceCode;
 import com.gitalk.domain.oauth.github.model.GithubUserInfo;
 
 /**
- * GithubOauthClient Description :
- * NOTE :
+ * GithubOauthClient Description : GitHub OAuth 및 사용자 API를 HTTP로 호출하는 클라이언트입니다.
+ * NOTE : 외부 연동용 service 성격의 클래스이며, 토큰 polling, 사용자 정보 조회, API 오류 처리를 담당합니다.
  *
  * @author jki
  * @since 04-08 (수) 오후 4:58

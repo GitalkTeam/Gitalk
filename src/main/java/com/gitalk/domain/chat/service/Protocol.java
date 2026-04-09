@@ -31,7 +31,11 @@ public class Protocol {
     public static final String QUIT         = "QUIT";
     public static final String SERVER       = "SERVER";
     public static final String ASCII_ART    = "ASCII_ART";  // 이미지 → ASCII 아트 패킷
-
+    public static final String SEARCH_SHARE = "SEARCH_SHARE";
+    public static final String SEARCH_SHARED = "SEARCH_SHARED";
+    public static final String SEARCH_VIEW = "SEARCH_VIEW";
+    public static final String SEARCH_VIEW_RESULT = "SEARCH_VIEW_RESULT";
+    public static final String SEARCH_ERROR = "SEARCH_ERROR";
     static final String SEP = ":";
 
     // ── 클라이언트 → 서버 빌더 ──────────────────────────────────────────────
@@ -86,6 +90,21 @@ public class Protocol {
     public static String buildBotPacket(String content) {
         return BOT + SEP + content;
     }
+    public static String buildSearchSharePacket(String encodedSession) {
+        return SEARCH_SHARE + SEP + encodedSession;
+    }
+    public static String buildSearchSharedPacket(String shareId) {
+        return SEARCH_SHARED + SEP + shareId;
+    }
+    public static String buildSearchViewPacket(String shareId) {
+        return SEARCH_VIEW + SEP + shareId;
+    }
+    public static String buildSearchViewResultPacket(String shareId, String encodedSession) {
+        return SEARCH_VIEW_RESULT + SEP + shareId + SEP + encodedSession;
+    }
+    public static String buildSearchErrorPacket(String message) {
+        return SEARCH_ERROR + SEP + message;
+    }
 
     /**
      * ASCII 아트 패킷: ASCII_ART:sender:filename:base64(art)
@@ -116,5 +135,33 @@ public class Protocol {
     public static String typeOf(String raw) {
         int idx = raw.indexOf(SEP);
         return idx == -1 ? raw : raw.substring(0, idx);
+    }
+    public static String extractClientMessageContent(String raw) {
+        return extractBody(raw, MSG);
+    }
+    public static String extractBotContent(String raw) {
+        return extractBody(raw, BOT);
+    }
+    public static String extractSearchSharePayload(String raw) {
+        return extractBody(raw, SEARCH_SHARE);
+    }
+    public static String extractSearchViewShareId(String raw) {
+        return extractBody(raw, SEARCH_VIEW);
+    }
+    public static String extractSearchSharedShareId(String raw) {
+        return extractBody(raw, SEARCH_SHARED);
+    }
+    public static String extractSearchErrorMessage(String raw) {
+        return extractBody(raw, SEARCH_ERROR);
+    }
+    private static String extractBody(String raw, String type) {
+        if (raw == null) {
+            return "";
+        }
+        String prefix = type + SEP;
+        if (!raw.startsWith(prefix)) {
+            return "";
+        }
+        return raw.substring(prefix.length());
     }
 }

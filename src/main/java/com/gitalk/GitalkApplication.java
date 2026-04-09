@@ -2,22 +2,23 @@ package com.gitalk;
 
 import com.gitalk.common.util.Layout;
 import com.gitalk.common.view.MainView;
+import com.gitalk.domain.chat.config.MongoConnectionManager;
 import com.gitalk.domain.chat.domain.ChatRoom;
 import com.gitalk.domain.chat.domain.Notice;
-import com.gitalk.domain.chat.repository.ChatRoomMemberRepositoryImpl;
-import com.gitalk.domain.chat.repository.ChatRoomRepositoryImpl;
-import com.gitalk.domain.chat.repository.NoticeRepositoryImpl;
+import com.gitalk.domain.chat.repository.*;
+import com.gitalk.domain.chat.search.service.ChatSearchService;
+import com.gitalk.domain.chat.search.service.SearchSessionManager;
 import com.gitalk.domain.chat.service.ChatRoomService;
+import com.gitalk.domain.chat.service.ChatService;
 import com.gitalk.domain.chat.service.NoticeService;
 import com.gitalk.domain.chat.session.ChatRoomSession;
 import com.gitalk.domain.chat.view.ChatRoomView;
+import com.gitalk.domain.chat.view.SearchView;
 import com.gitalk.domain.chatbot.service.NewsService;
 import com.gitalk.domain.chatbot.service.TrendingService;
 import com.gitalk.domain.chatbot.service.WebhookService;
-import com.gitalk.domain.chatbot.view.ChatBotView;
 import com.gitalk.domain.oauth.github.service.GithubAuthService;
 import com.gitalk.domain.oauth.github.service.GithubOauthClient;
-import com.gitalk.domain.user.model.Users;
 import com.gitalk.domain.user.model.Users;
 import com.gitalk.domain.user.repository.UserRepository;
 import com.gitalk.domain.user.service.UserService;
@@ -39,13 +40,35 @@ public class GitalkApplication {
     private static final MainView mainView = new MainView();
     private static final ChatRoomService chatRoomService = new ChatRoomService(
             new ChatRoomRepositoryImpl(), new ChatRoomMemberRepositoryImpl());
+
     private static final ChatRoomView chatRoomView = new ChatRoomView();
     private static final NoticeService noticeService = new NoticeService(new NoticeRepositoryImpl());
+
+    private static final MongoConnectionManager mongoConnectionManager = MongoConnectionManager.getInstance();
+
+    private static final MongoChatMessageRepository mongoChatMessageRepository =
+            new MongoChatMessageRepository(mongoConnectionManager);
+
+    private static final MongoSearchRepositoryImpl mongoSearchRepository =
+            new MongoSearchRepositoryImpl(mongoConnectionManager);
+
+    private static final ChatService chatService = new ChatService(mongoChatMessageRepository);
+
+    private static final ChatSearchService chatSearchService =
+            new ChatSearchService(mongoSearchRepository, chatService, chatRoomService);
+
+    private static final SearchSessionManager searchSessionManager = new SearchSessionManager();
+    private static final SearchView searchView = new SearchView();
+
+
     private static final ChatRoomSession chatRoomSession = new ChatRoomSession(
             trendingService, newsService, webhookService,
             new ChatRoomService(new ChatRoomRepositoryImpl(), new ChatRoomMemberRepositoryImpl()),
             new UserService(new UserRepository()),
-            noticeService);
+            noticeService,
+            chatSearchService, searchSessionManager, searchView
+            );
+
     private static UserService userService;
     private static BufferedReader reader;
 

@@ -1,8 +1,8 @@
 package com.gitalk.domain.oauth.github.model;
 
 /**
- * GithubUserInfo Description :
- * NOTE :
+ * GithubUserInfo Description : 인증된 GitHub 사용자 프로필 정보를 담는 모델입니다.
+ * NOTE : model 계층 DTO이며, 기존 계정 연동이나 GitHub 회원 등록 과정에서 사용됩니다.
  *
  * @author jki
  * @since 04-08 (수) 오후 4:56

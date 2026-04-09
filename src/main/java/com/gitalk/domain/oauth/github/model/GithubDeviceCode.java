@@ -1,8 +1,8 @@
 package com.gitalk.domain.oauth.github.model;
 
 /**
- * GithubDeviceCode Description :
- * NOTE :
+ * GithubDeviceCode Description : GitHub Device Flow 인증에 필요한 코드와 polling 정보를 담는 모델입니다.
+ * NOTE : model 계층 DTO이며, GitHub 기기 인증 시작 단계의 응답 데이터를 표현합니다.
  *
  * @author jki
  * @since 04-08 (수) 오후 4:56

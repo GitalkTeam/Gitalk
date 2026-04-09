@@ -1,8 +1,8 @@
 package com.gitalk.domain.user.view;
 
 /**
- * JoinAndLoginView Description :
- * NOTE :
+ * JoinAndLoginView Description : 콘솔 기반 회원 가입, 일반 로그인, GitHub 로그인 화면 흐름을 담당하는 view 클래스입니다.
+ * NOTE : view 계층 클래스이며, 사용자 입력과 출력은 처리하고 실제 비즈니스 로직은 service 계층에 위임합니다.
  *
  * @author jki
  * @since 04-07 (화) 오후 3:00
