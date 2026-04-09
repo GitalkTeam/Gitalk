@@ -2,6 +2,7 @@ package com.gitalk.chat.socket;
 
 import com.gitalk.chat.repository.InMemoryChatRepository;
 import com.gitalk.chat.service.ChatService;
+import com.gitalk.common.api.ImageAsciiHttpServer;
 
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -20,9 +21,14 @@ public class ChatServer {
     }
 
     public void start() throws IOException {
+        // 이미지 업로드용 HTTP 서버 시작
+        ImageAsciiHttpServer httpServer = new ImageAsciiHttpServer(chatService);
+        httpServer.start();
+
         try (ServerSocket serverSocket = new ServerSocket(port)) {
             System.out.println("=================================");
             System.out.println("채팅 서버 시작 (포트: " + port + ")");
+            System.out.println("이미지 변환 서버 (포트: " + ImageAsciiHttpServer.HTTP_PORT + ")");
             System.out.println("=================================");
             while (true) {
                 Socket socket = serverSocket.accept();
