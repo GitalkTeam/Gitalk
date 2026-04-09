@@ -5,6 +5,7 @@ SRC_DIR="src/main/java"
 RESOURCES_DIR="src/main/resources"
 OUT_DIR="out"
 LIB_DIR="lib"
+BIN_DIR="src/main/java/com/gitalk/common/api/ImageToAscii/ascii-image-converter"
 
 # lib 폴더에 JAR이 있는지 확인
 if [ -z "$(ls -A $LIB_DIR 2>/dev/null)" ]; then
@@ -15,9 +16,16 @@ if [ -z "$(ls -A $LIB_DIR 2>/dev/null)" ]; then
     exit 1
 fi
 
+# ── macOS / Linux: 바이너리 실행 권한 설정 ───────────────────────────────
+if [[ "$OSTYPE" != msys* && "$OSTYPE" != cygwin* && "$OSTYPE" != win* ]]; then
+    chmod +x "$BIN_DIR/mac_ascii-image-converter"   2>/dev/null
+    chmod +x "$BIN_DIR/linux_ascii-image-converter" 2>/dev/null
+fi
+
+# ── Java 컴파일 ───────────────────────────────────────────────────────────
 mkdir -p "$OUT_DIR"
 
-SRC_FILES=$(find "$SRC_DIR" -name "*.java")
+SRC_FILES=$(find "$SRC_DIR" -name "*.java" ! -path "*/ascii-image-converter/*")
 
 javac --release 21 -cp "$LIB_DIR/*" -d "$OUT_DIR" $SRC_FILES
 

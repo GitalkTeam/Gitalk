@@ -1,5 +1,8 @@
 package com.gitalk.chat.service;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+
 /**
  * 클라이언트-서버 간 텍스트 프로토콜 정의
  *
@@ -25,6 +28,7 @@ public class Protocol {
     public static final String MSG          = "MSG";
     public static final String QUIT         = "QUIT";
     public static final String SERVER       = "SERVER";
+    public static final String ASCII_ART    = "ASCII_ART";
 
     static final String SEP = ":";
 
@@ -67,10 +71,23 @@ public class Protocol {
         return SERVER + SEP + text;
     }
 
+    /** ASCII 아트 패킷: ASCII_ART:sender:filename:base64(art)
+     *  Base64 인코딩으로 ESC 등 모든 제어 문자를 안전하게 전송한다. */
+    public static String buildAsciiArtPacket(String sender, String filename, String asciiArt) {
+        String encoded = Base64.getEncoder()
+                .encodeToString(asciiArt.getBytes(StandardCharsets.UTF_8));
+        return ASCII_ART + SEP + sender + SEP + filename + SEP + encoded;
+    }
+
+    /** ASCII 아트 수신 측 Base64 디코딩 */
+    public static String decodeAsciiArt(String encoded) {
+        return new String(Base64.getDecoder().decode(encoded), StandardCharsets.UTF_8);
+    }
+
     // ── 파싱 ──────────────────────────────────────────────────────────────
 
     public static String[] parse(String raw) {
-        return raw.split(SEP, 3);  // 최대 3분할 → [타입, 필드1, 필드2]
+        return raw.split(SEP, 4);  // 최대 4분할 → [타입, 필드1, 필드2, 필드3]
     }
 
     public static String typeOf(String raw) {

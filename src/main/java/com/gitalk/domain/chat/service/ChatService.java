@@ -47,6 +47,16 @@ public class ChatService {
         }
     }
 
+    /** ASCII 아트를 모든 클라이언트에게 브로드캐스트 */
+    public void broadcastAsciiArt(String sender, String filename, String asciiArt) {
+        String packet = Protocol.buildAsciiArtPacket(sender, filename, asciiArt);
+        synchronized (clients) {
+            for (MessageSender client : clients) {
+                client.sendRaw(packet);
+            }
+        }
+    }
+
     public int getOnlineCount() {
         return clients.size();
     }
