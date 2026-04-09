@@ -1,6 +1,6 @@
 package com.gitalk.common.api;
 
-import com.gitalk.chat.service.ChatService;
+import com.gitalk.domain.chat.service.ChatService;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
@@ -57,10 +57,17 @@ public class ImageAsciiHttpServer {
         String rawQuery    = exchange.getRequestURI().getRawQuery();
         String sender      = parseParam(rawQuery, "sender");
         String filename    = parseParam(rawQuery, "filename");
+        Long   roomId      = parseLongParam(rawQuery, "roomId");
         int    termCols    = parseIntParam(rawQuery, "cols", 0);
         int    termRows    = parseIntParam(rawQuery, "rows", 0);
         String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
         String ext         = contentTypeToExt(contentType);
+
+        // roomId 필수 — 멀티방 라우팅용
+        if (roomId == null) {
+            sendResponse(exchange, 400, "roomId query parameter required");
+            return;
+        }
 
         // 이미지 바이트 수신
         byte[] imageBytes;
@@ -74,7 +81,7 @@ public class ImageAsciiHttpServer {
         }
         if (imageBytes.length > 20 * 1024 * 1024) {
             sendResponse(exchange, 413, "File too large (max 20MB)");
-            chatService.broadcastSystemMessage(sender + " 님의 이미지가 너무 큽니다 (최대 20MB).");
+            chatService.broadcastSystemMessage(roomId, sender + " 님의 이미지가 너무 큽니다 (최대 20MB).");
             return;
         }
 
@@ -85,19 +92,19 @@ public class ImageAsciiHttpServer {
         try {
             Files.write(tempFile.toPath(), imageBytes);
 
-            System.out.printf("[ImageAscii] %s 의 이미지 변환 시작 (%s, %d bytes)%n",
-                    sender, tempFile.getName(), imageBytes.length);
+            System.out.printf("[ImageAscii] room=%d %s 의 이미지 변환 시작 (%s, %d bytes)%n",
+                    roomId, sender, tempFile.getName(), imageBytes.length);
 
             String asciiArt = ImageToAsciiConverter.convert(tempFile, termCols, termRows);
 
-            chatService.broadcastAsciiArt(sender, filename, asciiArt);
+            chatService.broadcastAsciiArt(roomId, sender, filename, asciiArt);
 
-            System.out.printf("[ImageAscii] %s 의 이미지 변환 완료%n", sender);
+            System.out.printf("[ImageAscii] room=%d %s 의 이미지 변환 완료%n", roomId, sender);
             sendResponse(exchange, 200, "OK");
 
         } catch (Exception e) {
             System.err.println("[ImageAscii] 변환 오류: " + e.getMessage());
-            chatService.broadcastSystemMessage(sender + " 님의 이미지 변환 실패: " + e.getMessage());
+            chatService.broadcastSystemMessage(roomId, sender + " 님의 이미지 변환 실패: " + e.getMessage());
             sendResponse(exchange, 500, "Conversion failed: " + e.getMessage());
         } finally {
             tempFile.delete();
@@ -109,6 +116,13 @@ public class ImageAsciiHttpServer {
     private static int parseIntParam(String rawQuery, String key, int defaultValue) {
         String val = parseParam(rawQuery, key);
         try { return Integer.parseInt(val); } catch (NumberFormatException e) { return defaultValue; }
+    }
+
+    /** Long 파라미터. 누락/파싱실패 시 null. */
+    private static Long parseLongParam(String rawQuery, String key) {
+        String val = parseParam(rawQuery, key);
+        if (val == null || "알 수 없음".equals(val)) return null;
+        try { return Long.parseLong(val); } catch (NumberFormatException e) { return null; }
     }
 
     private static String parseParam(String rawQuery, String key) {

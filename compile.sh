@@ -27,7 +27,7 @@ mkdir -p "$OUT_DIR"
 
 SRC_FILES=$(find "$SRC_DIR" -name "*.java" ! -path "*/ascii-image-converter/*")
 
-javac --release 21 -cp "$LIB_DIR/*" -d "$OUT_DIR" $SRC_FILES
+javac -encoding UTF-8 --release 21 -cp "$LIB_DIR/*" -d "$OUT_DIR" $SRC_FILES
 
 if [ $? -eq 0 ]; then
     cp -r "$RESOURCES_DIR/." "$OUT_DIR/"

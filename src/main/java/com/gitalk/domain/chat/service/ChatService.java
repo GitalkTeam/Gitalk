@@ -1,67 +1,68 @@
-package com.gitalk.chat.service;
+package com.gitalk.domain.chat.service;
 
-import com.gitalk.chat.domain.Message;
-import com.gitalk.chat.repository.ChatRepository;
+import com.gitalk.domain.chat.domain.Message;
+import com.gitalk.domain.chat.repository.MessageRepository;
 
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class ChatService {
 
-    private final List<MessageSender> clients = Collections.synchronizedList(new ArrayList<>());
-    private final ChatRepository chatRepository;
-    private static final String DEFAULT_ROOM = "general";
+    /** 방별 접속 클라이언트. 같은 방에 속한 클라이언트끼리만 메시지를 주고받는다. */
+    private final Map<Long, List<MessageSender>> roomClients = new ConcurrentHashMap<>();
+    private final MessageRepository messageRepository;
 
-    public ChatService(ChatRepository chatRepository) {
-        this.chatRepository = chatRepository;
+    public ChatService(MessageRepository messageRepository) {
+        this.messageRepository = messageRepository;
     }
 
-    public void addClient(MessageSender sender) {
-        clients.add(sender);
+    public void addClient(Long roomId, MessageSender sender) {
+        roomClients.computeIfAbsent(roomId, k -> new CopyOnWriteArrayList<>()).add(sender);
     }
 
-    public void removeClient(MessageSender sender) {
-        clients.remove(sender);
+    public void removeClient(Long roomId, MessageSender sender) {
+        List<MessageSender> list = roomClients.get(roomId);
+        if (list != null) list.remove(sender);
     }
 
-    /** 메시지를 저장하고 송신자를 제외한 모든 클라이언트에게 브로드캐스트 */
+    /** 메시지를 저장하고 같은 방의 송신자 외 클라이언트에게 브로드캐스트 */
     public void broadcast(Message message, MessageSender sender) {
-        chatRepository.saveMessage(message);
-        String packet = Protocol.buildMsgPacket(message.getSender(), message.getContent());
-        synchronized (clients) {
-            for (MessageSender client : clients) {
-                if (client != sender) {
-                    client.sendRaw(packet);
-                }
-            }
-        }
+        messageRepository.save(message);
+        String packet = Protocol.buildMsgPacket(message.getSenderNickname(), message.getContent());
+        sendToRoom(message.getRoomId(), packet, sender);
     }
 
-    public void broadcastSystemMessage(String text) {
-        String packet = Protocol.buildServerPacket(text);
-        synchronized (clients) {
-            for (MessageSender client : clients) {
-                client.sendRaw(packet);
-            }
-        }
+    /** 챗봇 메시지를 DB 저장 없이 같은 방의 송신자 외 클라이언트에게 브로드캐스트 */
+    public void broadcastBot(Long roomId, String packet, MessageSender sender) {
+        sendToRoom(roomId, packet, sender);
     }
 
-    /** ASCII 아트를 모든 클라이언트에게 브로드캐스트 */
-    public void broadcastAsciiArt(String sender, String filename, String asciiArt) {
+    public void broadcastSystemMessage(Long roomId, String text) {
+        sendToRoom(roomId, Protocol.buildServerPacket(text), null);
+    }
+
+    /** ASCII 아트를 같은 방의 모든 클라이언트에게 브로드캐스트 (DB 저장 없음) */
+    public void broadcastAsciiArt(Long roomId, String sender, String filename, String asciiArt) {
         String packet = Protocol.buildAsciiArtPacket(sender, filename, asciiArt);
-        synchronized (clients) {
-            for (MessageSender client : clients) {
-                client.sendRaw(packet);
-            }
+        sendToRoom(roomId, packet, null);
+    }
+
+    public int getOnlineCount(Long roomId) {
+        List<MessageSender> list = roomClients.get(roomId);
+        return list == null ? 0 : list.size();
+    }
+
+    public List<Message> getRecentMessages(Long roomId, int limit) {
+        return messageRepository.findByRoomId(roomId, limit);
+    }
+
+    private void sendToRoom(Long roomId, String packet, MessageSender exclude) {
+        List<MessageSender> list = roomClients.get(roomId);
+        if (list == null) return;
+        for (MessageSender client : list) {
+            if (client != exclude) client.sendRaw(packet);
         }
-    }
-
-    public int getOnlineCount() {
-        return clients.size();
-    }
-
-    public String getDefaultRoom() {
-        return DEFAULT_ROOM;
     }
 }

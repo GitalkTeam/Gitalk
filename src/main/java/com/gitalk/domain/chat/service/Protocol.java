@@ -1,4 +1,4 @@
-package com.gitalk.chat.service;
+package com.gitalk.domain.chat.service;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -16,6 +16,7 @@ import java.util.Base64;
  *   JOIN_FAILED:사유
  *   MSG:발신자:내용
  *   SERVER:시스템메시지
+ *   ASCII_ART:발신자:파일명:base64(아트)
  *
  * 나중에 타입을 추가해 확장 가능 (예: IMAGE:base64data, FILE:filename:size)
  * DB 연동 후 LOGIN:username:password 방식으로 복구 예정
@@ -26,9 +27,10 @@ public class Protocol {
     public static final String JOIN_SUCCESS = "JOIN_SUCCESS";
     public static final String JOIN_FAILED  = "JOIN_FAILED";
     public static final String MSG          = "MSG";
+    public static final String BOT          = "BOT";   // 챗봇 응답 (DB 저장 없이 전체 브로드캐스트)
     public static final String QUIT         = "QUIT";
     public static final String SERVER       = "SERVER";
-    public static final String ASCII_ART    = "ASCII_ART";
+    public static final String ASCII_ART    = "ASCII_ART";  // 이미지 → ASCII 아트 패킷
 
     static final String SEP = ":";
 
@@ -36,6 +38,14 @@ public class Protocol {
 
     public static String buildJoinPacket(String nickname) {
         return JOIN + SEP + nickname;
+    }
+
+    public static String buildJoinPacket(Long userId, String nickname) {
+        return JOIN + SEP + userId + SEP + nickname;
+    }
+
+    public static String buildJoinPacket(Long userId, Long roomId, String nickname) {
+        return JOIN + SEP + userId + SEP + roomId + SEP + nickname;
     }
 
     public static String buildMsgPacket(String content) {
@@ -53,11 +63,13 @@ public class Protocol {
     }
 
     /** @deprecated DB 연동 후 복구 예정 */
+    @Deprecated
     public static String buildLoginSuccess(String nickname) {
         return JOIN_SUCCESS + SEP + nickname;
     }
 
     /** @deprecated DB 연동 후 복구 예정 */
+    @Deprecated
     public static String buildLoginFailed(String reason) {
         return JOIN_FAILED + SEP + reason;
     }
@@ -71,8 +83,14 @@ public class Protocol {
         return SERVER + SEP + text;
     }
 
-    /** ASCII 아트 패킷: ASCII_ART:sender:filename:base64(art)
-     *  Base64 인코딩으로 ESC 등 모든 제어 문자를 안전하게 전송한다. */
+    public static String buildBotPacket(String content) {
+        return BOT + SEP + content;
+    }
+
+    /**
+     * ASCII 아트 패킷: ASCII_ART:sender:filename:base64(art)
+     * Base64 인코딩으로 ESC 등 모든 제어 문자/줄바꿈을 안전하게 한 줄에 전송한다.
+     */
     public static String buildAsciiArtPacket(String sender, String filename, String asciiArt) {
         String encoded = Base64.getEncoder()
                 .encodeToString(asciiArt.getBytes(StandardCharsets.UTF_8));
@@ -87,7 +105,12 @@ public class Protocol {
     // ── 파싱 ──────────────────────────────────────────────────────────────
 
     public static String[] parse(String raw) {
-        return raw.split(SEP, 4);  // 최대 4분할 → [타입, 필드1, 필드2, 필드3]
+        return raw.split(SEP, 4);  // 최대 4분할 → [타입, 필드1, 필드2, 필드3]  (ASCII_ART 등 4필드 지원)
+    }
+
+    /** JOIN 전용 4분할 → [JOIN, userId, roomId, nickname] */
+    public static String[] parseJoin(String raw) {
+        return raw.split(SEP, 4);
     }
 
     public static String typeOf(String raw) {

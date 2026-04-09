@@ -1,5 +1,6 @@
 package com.gitalk.domain.chatbot.view;
 
+import com.gitalk.common.util.Layout;
 import com.gitalk.domain.chatbot.model.NewsItem;
 import com.gitalk.domain.chatbot.model.TrendingRepo;
 import com.gitalk.domain.chatbot.model.WebhookEvent;
@@ -11,46 +12,34 @@ public class ChatBotView {
     private static final int WIDTH = 68;
     private static final String DIV = "─".repeat(WIDTH);
 
-    // ── 레이아웃 유틸 ──────────────────────────────────────────────────────
+    // ── 컬럼 폭 ──────────────────────────────────────────────────────────────
+    private static final int W_TREND_NAME    = 40;
+    private static final int W_TREND_LANG    = 14;
+    private static final int W_TREND_DESC    = 64;  // 들여쓰기 4칸 제외
+    private static final int W_NEWS_TITLE    = 60;
+    private static final int W_WEBHOOK_TITLE = 60;
+    private static final int W_WEBHOOK_REPO  = 30;
 
-    public String center(String text) {
-        int padding = Math.max(0, (WIDTH - displayWidth(text)) / 2);
-        return " ".repeat(padding) + text;
+    // ── 레이아웃 유틸 (Layout 위임) ────────────────────────────────────────
+
+    private String center(String text) {
+        return Layout.center(text, WIDTH);
     }
 
-    public int displayWidth(String s) {
-        int w = 0;
-        for (char c : s.toCharArray()) {
-            w += (c >= '\uAC00' && c <= '\uD7A3') || (c >= '\u1100' && c <= '\uFFA0') ? 2 : 1;
-        }
-        return w;
-    }
-
-    public String wrapText(String text, int maxDisplayWidth) {
+    /** 단어 단위 줄바꿈 — 들여쓰기 한 칸 + 표시 너비 기준 */
+    private String wrapText(String text, int maxDisplayWidth) {
         StringBuilder result = new StringBuilder();
-        String[] words = text.split(" ");
-        StringBuilder line = new StringBuilder(" ");
-        int lineWidth = 1;
-        for (String word : words) {
-            int wordWidth = displayWidth(word);
-            if (lineWidth + wordWidth + 1 > maxDisplayWidth && lineWidth > 1) {
-                result.append(line).append("\n");
-                line = new StringBuilder(" ").append(word);
-                lineWidth = 1 + wordWidth;
-            } else {
-                if (lineWidth > 1) { line.append(" "); lineWidth++; }
-                line.append(word);
-                lineWidth += wordWidth;
-            }
+        for (String line : Layout.wrapWords(text, maxDisplayWidth - 1)) {
+            if (result.length() > 0) result.append('\n');
+            result.append(' ').append(line);
         }
-        if (line.length() > 1) result.append(line);
         return result.toString();
     }
 
     // ── 공통 ───────────────────────────────────────────────────────────────
 
     public void printCommandHint() {
-        System.out.println(" 명령어: trend [필터] | news | webhook start/stop/list | help | exit");
+        System.out.println(center("명령어: trend [필터] | news | webhook start/stop/list | help | exit"));
         System.out.println(DIV + "\n");
     }
 
@@ -62,15 +51,16 @@ public class ChatBotView {
 
     public void printTrendingList(List<TrendingRepo> repos, String[] descriptions, String filterDesc) {
         System.out.println("\n" + DIV);
-        System.out.println(center("GitHub 트렌딩 [" + filterDesc + "]"));
+        System.out.println(center("GitHub 트렌딩 [" + Layout.truncate(filterDesc, 30) + "]"));
         System.out.println(DIV);
         for (int i = 0; i < repos.size(); i++) {
             TrendingRepo repo = repos.get(i);
-            String lang = repo.language() != null ? repo.language() : "N/A";
-            System.out.printf(" %d. %s%n", i + 1, repo.fullName());
+            String lang = Layout.fit(repo.language() != null ? repo.language() : "N/A", W_TREND_LANG);
+            String name = Layout.truncate(repo.fullName(), W_TREND_NAME);
+            System.out.printf(" %d. %s%n", i + 1, name);
             System.out.printf("    %s · ⭐ %,d%n", lang, repo.stars());
             if (descriptions[i] != null && !descriptions[i].isBlank()) {
-                System.out.printf("    %s%n", descriptions[i]);
+                System.out.printf("    %s%n", Layout.truncate(descriptions[i], W_TREND_DESC));
             }
             System.out.println();
         }
@@ -99,8 +89,11 @@ public class ChatBotView {
         System.out.println(DIV);
         for (int i = 0; i < items.size(); i++) {
             NewsItem item = items.get(i);
-            System.out.printf(" %2d. %s%n", i + 1, titles[i]);
-            System.out.printf("     ⭐ %d | %s | %s%n%n", item.score(), domains[i], times[i]);
+            System.out.printf(" %2d. %s%n", i + 1, Layout.truncate(titles[i], W_NEWS_TITLE));
+            System.out.printf("     ⭐ %d | %s | %s%n%n",
+                    item.score(),
+                    Layout.truncate(domains[i], 24),
+                    Layout.truncate(times[i], 16));
         }
         System.out.println(DIV);
     }
@@ -126,13 +119,18 @@ public class ChatBotView {
         System.out.println("\n" + DIV);
         System.out.println(center("Webhook 서버 시작 (포트: " + port + ")"));
         System.out.println(DIV);
-        System.out.println(" GitHub 레포 → Settings → Webhooks → Add webhook");
-        System.out.println();
-        System.out.println(" Payload URL");
-        System.out.println("   http://<ngrok-url>:" + port + "/webhook");
-        System.out.println();
-        System.out.println(" Content type:  application/json");
-        System.out.println(" Events:        ☑ Issues  ☑ Pull requests");
+        List<String> instructions = List.of(
+                "GitHub 레포 → Settings → Webhooks → Add webhook",
+                "",
+                "Payload URL",
+                "  http://<ngrok-url>:" + port + "/webhook",
+                "",
+                "Content type:  application/json",
+                "Events:        ☑ Issues  ☑ Pull requests"
+        );
+        for (String line : Layout.centerBlock(instructions, WIDTH)) {
+            System.out.println(line);
+        }
     }
 
     public void printWebhookStopped() {
@@ -149,10 +147,11 @@ public class ChatBotView {
         } else {
             for (WebhookEvent e : events) {
                 String icon = "pull_request".equals(e.type()) ? "PR" : "Issue";
-                System.out.printf(" [%s] %s | %s%n", icon, e.action(), e.repo());
-                System.out.printf(" 제목: %s%n", e.title());
-                System.out.printf(" 작성자: %s%n", e.author());
-                System.out.printf(" %s%n%n", e.url());
+                String repo = Layout.truncate(e.repo(), W_WEBHOOK_REPO);
+                System.out.printf(" [%s] %s | %s%n", icon, Layout.truncate(e.action(), 16), repo);
+                System.out.printf(" 제목: %s%n", Layout.truncate(e.title(), W_WEBHOOK_TITLE));
+                System.out.printf(" 작성자: %s%n", Layout.truncate(e.author(), 24));
+                System.out.printf(" %s%n%n", Layout.truncate(e.url(), 64));
             }
         }
     }
@@ -170,14 +169,19 @@ public class ChatBotView {
         System.out.println("\n" + DIV);
         System.out.println(center("Gitalk 명령어 목록"));
         System.out.println(DIV);
-        System.out.println(" trend [필터]     GitHub 트렌딩 + AI 분석");
-        System.out.println("   예) trend java / trend topic:ai");
-        System.out.println(" news             HackerNews 개발자 뉴스");
-        System.out.println(" webhook start    웹훅 서버 시작");
-        System.out.println(" webhook stop     웹훅 서버 종료");
-        System.out.println(" webhook list     수신된 이벤트 목록");
-        System.out.println(" help             도움말");
-        System.out.println(" exit             종료");
+        List<String> commands = List.of(
+                "trend [필터]     GitHub 트렌딩 + AI 분석",
+                "  예) trend java / trend topic:ai",
+                "news             HackerNews 개발자 뉴스",
+                "webhook start    웹훅 서버 시작",
+                "webhook stop     웹훅 서버 종료",
+                "webhook list     수신된 이벤트 목록",
+                "help             도움말",
+                "exit             종료"
+        );
+        for (String line : Layout.centerBlock(commands, WIDTH)) {
+            System.out.println(line);
+        }
         System.out.println(DIV + "\n");
     }
 }
