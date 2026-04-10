@@ -18,7 +18,6 @@ public class ChatRoomView {
 
     // ── 채팅방 목록 컬럼 폭 (표시 너비 기준) ─────────────────────────────────
     private static final int W_INDEX   = 3;   // " 1." ~ "99."
-    private static final int W_TYPE    = 6;   // "[오픈]" 또는 "[팀]"
     private static final int W_NAME    = 22;  // 방 이름 (초과 시 …)
     private static final int W_CREATOR = 10;  // 만든이 닉네임
     private static final int W_DATE    = 8;   // yy/MM/dd
@@ -40,32 +39,139 @@ public class ChatRoomView {
 
     // ── 채팅방 목록 ──────────────────────────────────────────────────────────
 
+    /**
+     * 내 채팅방 목록 — TEAM/OPEN 섹션으로 분리해서 출력.
+     * rooms 리스트는 controller 에서 TEAM 먼저, OPEN 나중으로 정렬되어 있다고 가정.
+     * 번호는 섹션을 가로질러 1..N 으로 연속 부여 (사용자가 단일 숫자로 선택할 수 있도록).
+     */
     public void printRoomList(List<ChatRoom> rooms, Map<Long, Integer> memberCounts) {
         System.out.println("\n" + DIV);
         System.out.println(centerLine("내 채팅방"));
         System.out.println(DIV);
+
         if (rooms.isEmpty()) {
             System.out.println(centerLine("참여 중인 채팅방이 없습니다."));
-            System.out.println(centerLine("방을 만들거나 초대를 받아 참여하세요."));
+            System.out.println(centerLine("[C] 팀 방 만들기 또는 [O] 오픈 채팅에서 둘러보기"));
         } else {
+            // 컬럼 헤더 (회색 한 줄)
+            printRoomListHeader();
+
+            String currentType = null;
             for (int i = 0; i < rooms.size(); i++) {
                 ChatRoom r = rooms.get(i);
-                String idx     = Layout.padLeft((i + 1) + ".", W_INDEX);
-                String typeTag = Layout.fit("TEAM".equals(r.getType()) ? "[팀]" : "[오픈]", W_TYPE);
-                String name    = Layout.fit(r.getName(), W_NAME);
-                String creator = Layout.fit(r.getCreatorNickname() != null ? r.getCreatorNickname() : "?", W_CREATOR);
-                String date    = Layout.fit(r.getCreatedAt() != null ? r.getCreatedAt().format(DATE_FMT) : "", W_DATE);
-                int memberNum  = memberCounts == null ? 0 : memberCounts.getOrDefault(r.getRoomId(), 0);
-                String count   = Layout.padLeft(memberNum + "명", W_COUNT);
-                System.out.println(" " + idx + " " + typeTag + " " + name
-                        + "  " + creator + "  " + date + "  " + count);
+                if (!r.getType().equals(currentType)) {
+                    currentType = r.getType();
+                    String label = "TEAM".equals(currentType) ? "팀 채팅" : "오픈 채팅";
+                    System.out.println(" ─── " + label + " ───");
+                }
+                printRoomListRow(i + 1, r, memberCounts);
             }
         }
+
         System.out.println(DIV);
-        System.out.println(centerLine("C. 방 만들기    0. 취소"));
+        System.out.println(centerLine("C. 팀 방 만들기    O. 오픈 채팅 둘러보기    0. 취소"));
         System.out.println(DIV);
         System.out.print(" 선택 > ");
         System.out.flush();
+    }
+
+    private void printRoomListHeader() {
+        String idx     = Layout.padLeft("#", W_INDEX);
+        String name    = Layout.fit("이름", W_NAME);
+        String creator = Layout.fit("만든이", W_CREATOR);
+        String date    = Layout.fit("날짜", W_DATE);
+        String count   = Layout.padLeft("인원", W_COUNT);
+        System.out.println(" " + idx + " " + name
+                + "  " + creator + "  " + date + "  " + count);
+    }
+
+    private void printRoomListRow(int index, ChatRoom r, Map<Long, Integer> memberCounts) {
+        String idx     = Layout.padLeft(index + ".", W_INDEX);
+        String name    = Layout.fit(r.getName(), W_NAME);
+        String creator = Layout.fit(r.getCreatorNickname() != null ? r.getCreatorNickname() : "?", W_CREATOR);
+        String date    = Layout.fit(r.getCreatedAt() != null ? r.getCreatedAt().format(DATE_FMT) : "", W_DATE);
+        int memberNum  = memberCounts == null ? 0 : memberCounts.getOrDefault(r.getRoomId(), 0);
+        String count   = Layout.padLeft(memberNum + "명", W_COUNT);
+        System.out.println(" " + idx + " " + name
+                + "  " + creator + "  " + date + "  " + count);
+    }
+
+    // ── 오픈 채팅 ────────────────────────────────────────────────────────────
+
+    private static final int W_OPEN_NAME    = 22;
+    private static final int W_OPEN_COUNT   = 5;   // "999명"
+    private static final int W_OPEN_DESC    = 30;  // 토픽 설명
+
+    public void printOpenRoomList(String header, List<ChatRoom> rooms, Map<Long, Integer> memberCounts) {
+        System.out.println("\n" + DIV);
+        System.out.println(centerLine(header));
+        System.out.println(DIV);
+        if (rooms == null || rooms.isEmpty()) {
+            System.out.println(centerLine("표시할 오픈 채팅이 없습니다."));
+            System.out.println(centerLine("[C] 키로 새 오픈 방을 만들어 보세요."));
+        } else {
+            printOpenRoomListHeader();
+            for (int i = 0; i < rooms.size(); i++) {
+                printOpenRoomListRow(i + 1, rooms.get(i), memberCounts);
+            }
+        }
+        System.out.println(DIV);
+        System.out.println(centerLine("C. 새 오픈 방 만들기    S. 검색    0. 뒤로"));
+        System.out.println(DIV);
+        System.out.print(" 선택 > ");
+        System.out.flush();
+    }
+
+    private void printOpenRoomListHeader() {
+        String idx   = Layout.padLeft("#", W_INDEX);
+        String name  = Layout.fit("이름", W_OPEN_NAME);
+        String count = Layout.padLeft("인원", W_OPEN_COUNT);
+        String desc  = Layout.fit("설명", W_OPEN_DESC);
+        System.out.println(" " + idx + " " + name + "  " + count + "  " + desc);
+    }
+
+    private void printOpenRoomListRow(int index, ChatRoom r, Map<Long, Integer> memberCounts) {
+        String idx   = Layout.padLeft(index + ".", W_INDEX);
+        String name  = Layout.fit(r.getName(), W_OPEN_NAME);
+        int memberN  = memberCounts == null ? 0 : memberCounts.getOrDefault(r.getRoomId(), 0);
+        String count = Layout.padLeft(memberN + "명", W_OPEN_COUNT);
+        String desc  = Layout.fit(r.getDescription() != null ? r.getDescription() : "", W_OPEN_DESC);
+        System.out.println(" " + idx + " " + name + "  " + count + "  " + desc);
+    }
+
+    public void printOpenRoomSearchPrompt() {
+        System.out.println("\n" + DIV);
+        System.out.println(centerLine("오픈 채팅 검색"));
+        System.out.println(DIV);
+        System.out.print(" 검색어 (취소: 빈값) > ");
+        System.out.flush();
+    }
+
+    public void printOpenRoomCreateForm() {
+        System.out.println("\n" + DIV);
+        System.out.println(centerLine("새 오픈 채팅 만들기"));
+        System.out.println(DIV);
+        System.out.println(centerLine("이름 규칙: 한글/영문/숫자/대시(-)/언더스코어(_)/공백, 3~30자"));
+        System.out.println(DIV);
+        System.out.print(" 이름 > ");
+        System.out.flush();
+    }
+
+    public void printOpenRoomDescriptionPrompt() {
+        System.out.print(" 설명 (선택, Enter로 건너뛰기) > ");
+        System.out.flush();
+    }
+
+    public void printOpenRoomCreateConfirm(String name, String description) {
+        System.out.println();
+        System.out.println(" 이름 : " + name);
+        System.out.println(" 설명 : " + (description == null || description.isBlank() ? "(없음)" : description));
+        System.out.print(" 생성하시겠습니까? (y/n) > ");
+        System.out.flush();
+    }
+
+    public void printOpenRoomNoResult(String keyword) {
+        System.out.println(" '" + keyword + "' 에 해당하는 오픈 채팅이 없습니다.");
     }
 
     // ── 방 액션 메뉴 (최신 공지 포함) ───────────────────────────────────────
@@ -142,10 +248,16 @@ public class ChatRoomView {
     // ── 방 만들기 ────────────────────────────────────────────────────────────
 
     public void printCreateForm() {
+        printTeamCreateForm();
+    }
+
+    public void printTeamCreateForm() {
         System.out.println("\n" + DIV);
-        System.out.println(centerLine("채팅방 만들기"));
+        System.out.println(centerLine("새 팀 채팅방 만들기"));
         System.out.println(DIV);
-        System.out.print(" 방 이름 > ");
+        System.out.println(centerLine("팀원을 초대해서 사용하는 비공개 방입니다."));
+        System.out.println(DIV);
+        System.out.print(" 방 이름 (1~30자) > ");
         System.out.flush();
     }
 

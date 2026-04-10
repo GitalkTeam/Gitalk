@@ -98,6 +98,7 @@ public class ChatRoomSession {
     private Long currentRoomId;
     private Long currentUserId;
     private String currentNickname;
+    private String currentRoomType;   // "TEAM" 또는 "OPEN" — 명령 권한 분기용
 
     // 이미지(ASCII 아트) 수신 저장소 — 세션 동안 유지
     private final Map<String, String> asciiArtStore = new ConcurrentHashMap<>();
@@ -133,6 +134,9 @@ public class ChatRoomSession {
         currentUserId = userId;
         currentRoomId = roomId;
         currentNickname = nickname;
+        currentRoomType = chatRoomService.getRoom(roomId)
+                .map(r -> r.getType())
+                .orElse("TEAM");
         asciiArtStore.clear();
         imageCounter.set(0);
 
@@ -226,9 +230,12 @@ public class ChatRoomSession {
             currentRoomId = null;
             currentUserId = null;
             currentNickname = null;
+            currentRoomType = null;
             Spinner.setSuppressed(false);
         }
     }
+
+    // ── 외부 명령 (방 밖에서 /search 등) ─────────────────────────────────
 
     public void handleOutsideRoomCommand(Long userId, String nickname, String rawCommand) {
         String command = sanitize(rawCommand);
@@ -286,6 +293,22 @@ public class ChatRoomSession {
             lineReader = previousLineReader;
             terminal = previousTerminal;
         }
+    }
+
+    // ── 방 타입 헬퍼 (OPEN 채팅 권한 분기) ──────────────────────────────
+
+    /** 현재 입장 중인 방이 OPEN 채팅인지 */
+    private boolean isOpenChatRoom() {
+        return "OPEN".equals(currentRoomType);
+    }
+
+    /** OPEN 방에서 호출 시 안내 메시지 출력 후 true 반환 */
+    private boolean blockIfOpenRoom(String commandLabel) {
+        if (isOpenChatRoom()) {
+            printToScroll(DIM + " 오픈 채팅에서는 " + commandLabel + " 기능을 사용할 수 없습니다." + RESET);
+            return true;
+        }
+        return false;
     }
 
     // ── 출력 (JLine printAbove 위임) ────────────────────────────────────────
@@ -648,6 +671,7 @@ public class ChatRoomSession {
     }
 
     private void cmdWebhook(String sub) {
+        if (blockIfOpenRoom("웹훅")) return;
         switch (sub.toLowerCase()) {
             case "start" -> {
                 if (webhookService.isRunning()) {
@@ -684,6 +708,8 @@ public class ChatRoomSession {
     }
 
     private void cmdInvite(String email) {
+        // 오픈 채팅은 자유 입장이라 초대 개념이 없음
+        if (blockIfOpenRoom("초대")) return;
         if (email.isBlank()) {
             printToScroll(DIM + " 사용법: /invite <이메일>" + RESET);
             return;
@@ -703,6 +729,7 @@ public class ChatRoomSession {
     }
 
     private void cmdNotice(String arg) {
+        if (blockIfOpenRoom("공지")) return;
         if (arg.isBlank()) {
             // 공지 목록
             List<Notice> notices = noticeService.getNotices(currentRoomId);
@@ -807,15 +834,17 @@ public class ChatRoomSession {
     }
 
     private void cmdHelp() {
-        printToScroll(BOLD + " ─── 명령어 ───" + RESET);
-        printToScroll(" /notice             공지 목록 보기");
-        printToScroll(" /notice <제목>      공지 등록");
-        printToScroll(" /invite <이메일>    멤버 초대");
+        boolean open = isOpenChatRoom();
+        String teamOnly = open ? DIM + " (팀 전용)" + RESET : "";
+        printToScroll(BOLD + " ─── 명령어 " + (open ? "(오픈 채팅)" : "(팀 채팅)") + " ───" + RESET);
+        printToScroll(" /notice             공지 목록 보기" + teamOnly);
+        printToScroll(" /notice <제목>      공지 등록" + teamOnly);
+        printToScroll(" /invite <이메일>    멤버 초대" + teamOnly);
         printToScroll(" /trend [언어]       GitHub 트렌딩 조회  (예: /trend python)");
         printToScroll(" /news               Hacker News Top 5");
-        printToScroll(" /webhook start      웹훅 서버 시작");
-        printToScroll(" /webhook stop       웹훅 서버 중지");
-        printToScroll(" /webhook list       웹훅 이벤트 목록");
+        printToScroll(" /webhook start      웹훅 서버 시작" + teamOnly);
+        printToScroll(" /webhook stop       웹훅 서버 중지" + teamOnly);
+        printToScroll(" /webhook list       웹훅 이벤트 목록" + teamOnly);
         printToScroll(" /image              이미지 업로드 → ASCII 아트 변환 후 방에 공유");
         printToScroll(" /image <N>.view     수신한 N번 이미지 ASCII 아트 보기");
         printToScroll(" /search <키워드>    현재 방 메시지 검색");
