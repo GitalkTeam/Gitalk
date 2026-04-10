@@ -105,6 +105,10 @@ public class GitalkApplication {
                 return;
             }
 
+            if (handleGlobalSlashCommand(user, choice)) {
+                continue;
+            }
+
             switch (choice.trim()) {
                 case "1" -> runChatRoom(user);
                 case "2" -> runNoticeBoard(user);
@@ -150,6 +154,10 @@ public class GitalkApplication {
             String input = readLine();
             if (input == null || input.equals("0")) return;
 
+            if (handleGlobalSlashCommand(user, input)) {
+                continue;
+            }
+
             if ("c".equalsIgnoreCase(input)) {
                 ChatRoom room = createRoom(user);
                 if (room != null) enterRoom(user, room);
@@ -173,6 +181,10 @@ public class GitalkApplication {
             Notice latestNotice = noticeService.getNotices(room.getRoomId()).stream().findFirst().orElse(null);
             chatRoomView.printRoomActionMenu(room, isCreator, latestNotice);
             String input = readLine();
+
+            if (handleGlobalSlashCommand(user, input)) {
+                continue;
+            }
 
             switch (input == null ? "0" : input.trim()) {
                 case "1" -> { enterRoom(user, room); return; }
@@ -210,8 +222,21 @@ public class GitalkApplication {
 
     private static void enterRoom(Users user, ChatRoom room) {
         chatRoomView.printEntering(room);
-        String nickname = user.getNickname() != null ? user.getNickname() : user.getEmail();
+        String nickname = resolveNickname(user);
         chatRoomSession.enter(user.getUserId(), nickname, room.getRoomId(), room.getName());
+    }
+
+    private static boolean handleGlobalSlashCommand(Users user, String input) {
+        if (input == null || !input.startsWith("/")) {
+            return false;
+        }
+
+        chatRoomSession.handleOutsideRoomCommand(user.getUserId(), resolveNickname(user), input);
+        return true;
+    }
+
+    private static String resolveNickname(Users user) {
+        return user.getNickname() != null ? user.getNickname() : user.getEmail();
     }
 
     private static void inviteToRoom(Users inviter, ChatRoom room) {

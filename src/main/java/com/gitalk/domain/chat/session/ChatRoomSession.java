@@ -226,9 +226,33 @@ public class ChatRoomSession {
             socketOut = null;
             lineReader = null;
             terminal = null;
+            currentRoomId = null;
+            currentUserId = null;
             currentNickname = null;
             Spinner.setSuppressed(false);
         }
+    }
+
+    public void handleOutsideRoomCommand(Long userId, String nickname, String rawCommand) {
+        String command = sanitize(rawCommand);
+        if (command.isEmpty()) {
+            return;
+        }
+
+        if (command.startsWith("/")) {
+            command = command.substring(1).trim();
+        }
+
+        String[] parts = command.split("\\s+", 2);
+        String main = parts[0].toLowerCase();
+        String arg = parts.length > 1 ? parts[1].trim() : "";
+
+        if (!"search".equals(main)) {
+            System.out.println(" 채팅방 밖에서는 /search 명령만 사용할 수 있습니다.");
+            return;
+        }
+
+        executeSearchCommand(arg, nickname, userId, null, false);
     }
 
     // ── 출력 (JLine printAbove 위임) ────────────────────────────────────────
@@ -618,8 +642,15 @@ public class ChatRoomSession {
     }
 
     private void cmdSearch(String arg, String nickname) {
+        executeSearchCommand(arg, nickname, currentUserId, currentRoomId, currentRoomId != null);
+    }
+
+    private void executeSearchCommand(String arg,
+                                      String nickname,
+                                      Long userId,
+                                      Long roomId,
+                                      boolean joinedCurrentRoom) {
         try {
-            boolean joinedCurrentRoom = currentRoomId != null;
 
             SearchCommand command = SearchCommandParser.parse(arg);
 
@@ -629,13 +660,13 @@ public class ChatRoomSession {
             }
 
             if (command.isShare()) {
-                SearchSession session = searchSessionManager.get(currentUserId);
+                SearchSession session = searchSessionManager.get(userId);
                 if (session == null) {
                     printToScroll(DIM + " 최근 검색 내역이 없습니다." + RESET);
                     return;
                 }
 
-                if (!joinedCurrentRoom || currentRoomId == null) {
+                if (!joinedCurrentRoom || roomId == null) {
                     printToScroll(DIM + " 채팅방 안에서만 검색 결과를 공유할 수 있습니다." + RESET);
                     return;
                 }
@@ -666,9 +697,9 @@ public class ChatRoomSession {
                 return;
             }
             SearchExecutionContext context = new SearchExecutionContext(
-                    currentUserId,
+                    userId,
                     nickname,
-                    currentRoomId,
+                    roomId,
                     joinedCurrentRoom
             );
 
