@@ -144,7 +144,12 @@ public class GitalkApplication {
     private static void runChatRoom(Users user) {
         while (true) {
             mainView.clearScreen();
-            List<ChatRoom> rooms = chatRoomService.getMyRooms(user.getUserId());
+            // 화면 표시 / 번호 매핑이 일치하도록 TEAM 먼저, OPEN 나중으로 정렬해서 view에 넘김
+            List<ChatRoom> rooms = chatRoomService.getMyRooms(user.getUserId()).stream()
+                    .sorted(java.util.Comparator
+                            .comparingInt((ChatRoom r) -> "TEAM".equals(r.getType()) ? 0 : 1)
+                            .thenComparing(ChatRoom::getRoomId))
+                    .toList();
             Map<Long, Integer> memberCounts = rooms.stream()
                     .collect(Collectors.toMap(
                             ChatRoom::getRoomId,
@@ -159,9 +164,14 @@ public class GitalkApplication {
             }
 
             if ("c".equalsIgnoreCase(input)) {
-                ChatRoom room = createRoom(user);
+                ChatRoom room = createTeamRoom(user);
                 if (room != null) enterRoom(user, room);
                 continue; // 방 목록 새로고침
+            }
+
+            if ("o".equalsIgnoreCase(input)) {
+                runOpenChat(user);
+                continue; // 오픈 채팅 둘러보기 종료 후 내 방 목록으로 복귀
             }
 
             try {
@@ -169,6 +179,102 @@ public class GitalkApplication {
                 if (choice < 1 || choice > rooms.size()) continue;
                 handleRoomAction(user, rooms.get(choice - 1));
             } catch (NumberFormatException ignored) {}
+        }
+    }
+
+    // ── 오픈 채팅 둘러보기 ──────────────────────────────────────────────────
+
+    private static final int OPEN_CHAT_LIMIT = 20;
+
+    private static void runOpenChat(Users user) {
+        List<ChatRoom> rooms = chatRoomService.listPopularOpenRooms(OPEN_CHAT_LIMIT);
+        String header = "오픈 채팅 — 인기";
+
+        while (true) {
+            mainView.clearScreen();
+            Map<Long, Integer> memberCounts = rooms.stream()
+                    .collect(Collectors.toMap(
+                            ChatRoom::getRoomId,
+                            r -> chatRoomService.getMemberCount(r.getRoomId())));
+            chatRoomView.printOpenRoomList(header, rooms, memberCounts);
+
+            String input = readLine();
+            if (input == null || input.equals("0")) return;
+
+            if ("c".equalsIgnoreCase(input)) {
+                ChatRoom created = createOpenChat(user);
+                if (created != null) enterRoom(user, created);
+                rooms = chatRoomService.listPopularOpenRooms(OPEN_CHAT_LIMIT);
+                header = "오픈 채팅 — 인기";
+                continue;
+            }
+
+            if ("s".equalsIgnoreCase(input)) {
+                String keyword = promptSearchKeyword();
+                if (keyword == null || keyword.isBlank()) continue;
+                rooms = chatRoomService.searchOpenRooms(keyword, OPEN_CHAT_LIMIT);
+                header = "검색 결과: \"" + keyword + "\"";
+                if (rooms.isEmpty()) {
+                    chatRoomView.printOpenRoomNoResult(keyword);
+                    chatRoomView.pressEnter();
+                    readLine();
+                    rooms = chatRoomService.listPopularOpenRooms(OPEN_CHAT_LIMIT);
+                    header = "오픈 채팅 — 인기";
+                }
+                continue;
+            }
+
+            try {
+                int choice = Integer.parseInt(input);
+                if (choice < 1 || choice > rooms.size()) continue;
+                ChatRoom selected = rooms.get(choice - 1);
+                // 자동 가입 후 입장
+                try {
+                    chatRoomService.joinOpenRoom(selected.getRoomId(), user.getUserId());
+                } catch (Exception e) {
+                    System.out.println(" 입장 실패: " + e.getMessage());
+                    chatRoomView.pressEnter();
+                    readLine();
+                    continue;
+                }
+                enterRoom(user, selected);
+                // 입장 후 복귀 시 목록 새로고침
+                rooms = chatRoomService.listPopularOpenRooms(OPEN_CHAT_LIMIT);
+                header = "오픈 채팅 — 인기";
+            } catch (NumberFormatException ignored) {}
+        }
+    }
+
+    private static String promptSearchKeyword() {
+        mainView.clearScreen();
+        chatRoomView.printOpenRoomSearchPrompt();
+        return readLine();
+    }
+
+    private static ChatRoom createOpenChat(Users user) {
+        mainView.clearScreen();
+        chatRoomView.printOpenRoomCreateForm();
+        String name = readLine();
+        if (name == null || name.isBlank()) return null;
+
+        chatRoomView.printOpenRoomDescriptionPrompt();
+        String description = readLine();
+
+        chatRoomView.printOpenRoomCreateConfirm(name.trim(), description);
+        String confirm = readLine();
+        if (!"y".equalsIgnoreCase(confirm)) return null;
+
+        try {
+            ChatRoom room = chatRoomService.createRoom(name.trim(), "OPEN", null, description, user.getUserId());
+            chatRoomView.printCreateSuccess(room);
+            chatRoomView.pressEnter();
+            readLine();
+            return room;
+        } catch (IllegalArgumentException e) {
+            chatRoomView.printCreateFail(e.getMessage());
+            chatRoomView.pressEnter();
+            readLine();
+            return null;
         }
     }
 
@@ -284,15 +390,17 @@ public class GitalkApplication {
         return true;
     }
 
-    private static ChatRoom createRoom(Users user) {
+    private static ChatRoom createTeamRoom(Users user) {
         mainView.clearScreen();
-        chatRoomView.printCreateForm();
+        chatRoomView.printTeamCreateForm();
         String name = readLine();
         if (name == null || name.isBlank()) return null;
 
         try {
-            ChatRoom room = chatRoomService.createRoom(name.trim(), "OPEN", null, user.getUserId());
+            ChatRoom room = chatRoomService.createRoom(name.trim(), "TEAM", null, null, user.getUserId());
             chatRoomView.printCreateSuccess(room);
+            chatRoomView.pressEnter();
+            readLine();
             return room;
         } catch (IllegalArgumentException e) {
             chatRoomView.printCreateFail(e.getMessage());

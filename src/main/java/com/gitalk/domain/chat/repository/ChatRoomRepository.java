@@ -12,4 +12,10 @@ public interface ChatRoomRepository {
     List<ChatRoom> findByType(String type);
     boolean existsByTypeAndName(String type, String name);
     void deleteById(Long roomId);
+
+    /** 멤버수 desc 로 정렬한 OPEN 방 인기 목록 */
+    List<ChatRoom> findPopularOpenRooms(int limit);
+
+    /** 이름 부분 일치(대소문자 무시) 검색, OPEN 방 한정 */
+    List<ChatRoom> searchOpenRoomsByName(String keyword, int limit);
 }

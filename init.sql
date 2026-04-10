@@ -23,12 +23,13 @@ CREATE TABLE IF NOT EXISTS users (
 -- OPEN 타입은 같은 이름으로 중복 생성 불가 (TEAM은 자유)
 -- 함수형 유니크 인덱스: TEAM 행은 NULL로 평가되어 중복 허용
 CREATE TABLE IF NOT EXISTS chat_rooms (
-                                          roomid     BIGINT AUTO_INCREMENT PRIMARY KEY,
-                                          name       VARCHAR(255) NOT NULL,
-    type       ENUM('TEAM', 'OPEN') NOT NULL,
-    team_url   VARCHAR(255),
-    creator_id BIGINT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                          roomid      BIGINT AUTO_INCREMENT PRIMARY KEY,
+                                          name        VARCHAR(255) NOT NULL,
+    type        ENUM('TEAM', 'OPEN') NOT NULL,
+    team_url    VARCHAR(255),
+    description VARCHAR(500),                  -- OPEN 방 토픽 설명 (TEAM은 NULL)
+    creator_id  BIGINT,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uq_open_room_name ((CASE WHEN type = 'OPEN' THEN name END)),
     FOREIGN KEY (creator_id) REFERENCES users(userid) ON DELETE SET NULL
     );

@@ -5,8 +5,15 @@ import com.gitalk.domain.chat.repository.ChatRoomMemberRepository;
 import com.gitalk.domain.chat.repository.ChatRoomRepository;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.regex.Pattern;
 
 public class ChatRoomService {
+
+    /** OPEN 방 이름 규칙: 한글/영문/숫자/대시/언더스코어/공백, 3~30자 */
+    private static final Pattern OPEN_ROOM_NAME_PATTERN =
+            Pattern.compile("^[가-힣A-Za-z0-9_\\- ]{3,30}$");
+    private static final int MAX_DESCRIPTION_LENGTH = 500;
 
     private final ChatRoomRepository chatRoomRepository;
     private final ChatRoomMemberRepository memberRepository;
@@ -24,21 +31,31 @@ public class ChatRoomService {
                 .toList();
     }
 
-    /** 방 생성 후 생성자를 자동으로 멤버에 추가 */
-    public ChatRoom createRoom(String name, String type, String teamUrl, Long creatorId) {
+    public Optional<ChatRoom> getRoom(Long roomId) {
+        return chatRoomRepository.findById(roomId);
+    }
+
+    /** 방 생성 후 생성자를 자동으로 멤버에 추가. OPEN 방은 정규식 검증, TEAM 방은 길이만 검사. */
+    public ChatRoom createRoom(String name, String type, String teamUrl, String description, Long creatorId) {
         String trimmed = name == null ? "" : name.trim();
         if (trimmed.isBlank()) {
             throw new IllegalArgumentException("방 이름을 입력해주세요.");
         }
-        if (trimmed.length() > 30) {
+        if ("OPEN".equals(type)) {
+            validateOpenRoomName(trimmed);
+            if (chatRoomRepository.existsByTypeAndName("OPEN", trimmed)) {
+                throw new IllegalArgumentException("이미 같은 이름의 오픈채팅방이 있습니다.");
+            }
+        } else if (trimmed.length() > 30) {
             throw new IllegalArgumentException("방 이름은 30자 이하여야 합니다.");
         }
-        // OPEN 타입은 전역 유니크. TEAM 은 자유.
-        if ("OPEN".equals(type) && chatRoomRepository.existsByTypeAndName("OPEN", trimmed)) {
-            throw new IllegalArgumentException("이미 같은 이름의 오픈채팅방이 있습니다.");
+        String desc = description == null ? null : description.trim();
+        if (desc != null && desc.isEmpty()) desc = null;
+        if (desc != null && desc.length() > MAX_DESCRIPTION_LENGTH) {
+            throw new IllegalArgumentException("설명은 " + MAX_DESCRIPTION_LENGTH + "자 이하여야 합니다.");
         }
         try {
-            ChatRoom room = chatRoomRepository.save(new ChatRoom(trimmed, type, teamUrl, creatorId));
+            ChatRoom room = chatRoomRepository.save(new ChatRoom(trimmed, type, teamUrl, desc, creatorId));
             memberRepository.addMember(room.getRoomId(), creatorId);
             return room;
         } catch (RuntimeException e) {
@@ -48,6 +65,35 @@ public class ChatRoomService {
             }
             throw e;
         }
+    }
+
+    /** OPEN 방 이름 정규식 검증 */
+    public void validateOpenRoomName(String name) {
+        if (name == null || !OPEN_ROOM_NAME_PATTERN.matcher(name).matches()) {
+            throw new IllegalArgumentException(
+                    "오픈 채팅 이름은 한글/영문/숫자/대시(-)/언더스코어(_)/공백 3~30자만 가능합니다.");
+        }
+    }
+
+    /** 인기 오픈 채팅 목록 (멤버수 desc) */
+    public List<ChatRoom> listPopularOpenRooms(int limit) {
+        return chatRoomRepository.findPopularOpenRooms(limit);
+    }
+
+    /** 이름 부분 일치 검색 */
+    public List<ChatRoom> searchOpenRooms(String keyword, int limit) {
+        if (keyword == null || keyword.isBlank()) return List.of();
+        return chatRoomRepository.searchOpenRoomsByName(keyword.trim(), limit);
+    }
+
+    /** 오픈 채팅 자유 입장: 이미 멤버여도 무해 (UNIQUE 인덱스로 INSERT IGNORE 효과) */
+    public void joinOpenRoom(Long roomId, Long userId) {
+        ChatRoom room = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("존재하지 않는 채팅방입니다."));
+        if (!room.isOpen()) {
+            throw new RuntimeException("오픈 채팅방이 아닙니다.");
+        }
+        memberRepository.addMember(roomId, userId);
     }
 
     public void joinRoom(Long roomId, Long userId) {

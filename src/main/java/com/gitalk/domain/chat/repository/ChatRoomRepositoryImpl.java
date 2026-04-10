@@ -11,7 +11,7 @@ import java.util.Optional;
 public class ChatRoomRepositoryImpl implements ChatRoomRepository {
 
     private static final String SELECT_BASE = """
-            SELECT r.roomid, r.name, r.type, r.team_url, r.creator_id, r.created_at,
+            SELECT r.roomid, r.name, r.type, r.team_url, r.description, r.creator_id, r.created_at,
                    u.nickname AS creator_nickname
             FROM chat_rooms r
             LEFT JOIN users u ON r.creator_id = u.userid
@@ -19,14 +19,15 @@ public class ChatRoomRepositoryImpl implements ChatRoomRepository {
 
     @Override
     public ChatRoom save(ChatRoom room) {
-        String sql = "INSERT INTO chat_rooms (name, type, team_url, creator_id) VALUES (?, ?, ?, ?)";
+        String sql = "INSERT INTO chat_rooms (name, type, team_url, description, creator_id) VALUES (?, ?, ?, ?, ?)";
         try (Connection conn = DBConnection.makeConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
             pstmt.setString(1, room.getName());
             pstmt.setString(2, room.getType());
             pstmt.setString(3, room.getTeamUrl());
-            if (room.getCreatorId() != null) pstmt.setLong(4, room.getCreatorId());
-            else pstmt.setNull(4, java.sql.Types.BIGINT);
+            pstmt.setString(4, room.getDescription());
+            if (room.getCreatorId() != null) pstmt.setLong(5, room.getCreatorId());
+            else pstmt.setNull(5, java.sql.Types.BIGINT);
             pstmt.executeUpdate();
             ResultSet keys = pstmt.getGeneratedKeys();
             if (keys.next()) {
@@ -110,6 +111,58 @@ public class ChatRoomRepositoryImpl implements ChatRoomRepository {
         }
     }
 
+    @Override
+    public List<ChatRoom> findPopularOpenRooms(int limit) {
+        // 멤버수 desc, 동률이면 최신순. LEFT JOIN 으로 멤버 0명 방도 포함.
+        String sql = """
+                SELECT r.roomid, r.name, r.type, r.team_url, r.description, r.creator_id, r.created_at,
+                       u.nickname AS creator_nickname
+                FROM chat_rooms r
+                LEFT JOIN users u ON r.creator_id = u.userid
+                LEFT JOIN chat_room_members m ON m.roomid = r.roomid
+                WHERE r.type = 'OPEN'
+                GROUP BY r.roomid
+                ORDER BY COUNT(m.id) DESC, r.created_at DESC
+                LIMIT ?
+                """;
+        List<ChatRoom> result = new ArrayList<>();
+        try (Connection conn = DBConnection.makeConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, limit);
+            ResultSet rs = pstmt.executeQuery();
+            while (rs.next()) result.add(mapRow(rs));
+        } catch (SQLException e) {
+            throw new RuntimeException("인기 오픈 채팅 조회 실패", e);
+        }
+        return result;
+    }
+
+    @Override
+    public List<ChatRoom> searchOpenRoomsByName(String keyword, int limit) {
+        String sql = """
+                SELECT r.roomid, r.name, r.type, r.team_url, r.description, r.creator_id, r.created_at,
+                       u.nickname AS creator_nickname
+                FROM chat_rooms r
+                LEFT JOIN users u ON r.creator_id = u.userid
+                LEFT JOIN chat_room_members m ON m.roomid = r.roomid
+                WHERE r.type = 'OPEN' AND LOWER(r.name) LIKE ?
+                GROUP BY r.roomid
+                ORDER BY COUNT(m.id) DESC, r.created_at DESC
+                LIMIT ?
+                """;
+        List<ChatRoom> result = new ArrayList<>();
+        try (Connection conn = DBConnection.makeConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, "%" + keyword.toLowerCase() + "%");
+            pstmt.setInt(2, limit);
+            ResultSet rs = pstmt.executeQuery();
+            while (rs.next()) result.add(mapRow(rs));
+        } catch (SQLException e) {
+            throw new RuntimeException("오픈 채팅 검색 실패", e);
+        }
+        return result;
+    }
+
     private ChatRoom mapRow(ResultSet rs) throws SQLException {
         Timestamp ts = rs.getTimestamp("created_at");
         long creatorIdRaw = rs.getLong("creator_id");
@@ -119,6 +172,7 @@ public class ChatRoomRepositoryImpl implements ChatRoomRepository {
                 rs.getString("name"),
                 rs.getString("type"),
                 rs.getString("team_url"),
+                rs.getString("description"),
                 creatorId,
                 rs.getString("creator_nickname"),
                 ts != null ? ts.toLocalDateTime() : null

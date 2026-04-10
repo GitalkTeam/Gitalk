@@ -39,6 +39,9 @@ public final class Layout {
      * 정확히 width 컬럼이 되도록 맞춘다.
      * - 짧으면 우측에 공백 패딩
      * - 길면 끝을 ellipsis(…) 로 잘라 width 컬럼에 맞춤
+     *
+     * truncate 가 한글 등 2-컬럼 문자 경계 때문에 width 보다 1 작은 결과를 낼 수 있어,
+     * 마지막에 한 번 더 우측 패딩으로 정확히 width 컬럼을 보장한다.
      */
     public static String fit(String s, int width) {
         if (width <= 0) return "";
@@ -46,7 +49,9 @@ public final class Layout {
         int w = displayWidth(text);
         if (w == width) return text;
         if (w <  width) return text + " ".repeat(width - w);
-        return truncate(text, width);
+        String truncated = truncate(text, width);
+        int tw = displayWidth(truncated);
+        return tw < width ? truncated + " ".repeat(width - tw) : truncated;
     }
 
     /** 좌측 공백으로 width 컬럼까지 패딩 (숫자·뱃지 우측 정렬용) */
