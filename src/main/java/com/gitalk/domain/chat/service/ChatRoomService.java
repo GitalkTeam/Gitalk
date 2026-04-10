@@ -133,4 +133,14 @@ public class ChatRoomService {
     public int getMemberCount(Long roomId) {
         return memberRepository.findUserIdsByRoomId(roomId).size();
     }
+
+    /** 방에 GitHub repo 연결 (URL + webhook secret + GitHub 측 hook id 저장) */
+    public void linkRepo(Long roomId, String teamUrl, String webhookSecret, Long webhookId) {
+        chatRoomRepository.updateRepoLink(roomId, teamUrl, webhookSecret, webhookId);
+    }
+
+    /** repo 연결 해제 */
+    public void unlinkRepo(Long roomId) {
+        chatRoomRepository.updateRepoLink(roomId, null, null, null);
+    }
 }

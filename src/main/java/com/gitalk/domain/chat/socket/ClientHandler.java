@@ -1,6 +1,7 @@
 package com.gitalk.domain.chat.socket;
 
 import com.gitalk.domain.chat.domain.Message;
+import com.gitalk.domain.chat.repository.ChatRoomMemberRepository;
 import com.gitalk.domain.chat.search.domain.SearchSession;
 import com.gitalk.domain.chat.search.util.SearchSessionCodec;
 import com.gitalk.domain.chat.service.ChatService;
@@ -15,6 +16,7 @@ import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 
 /**
  * 소켓 클라이언트 1명당 1개 생성되는 핸들러
@@ -25,16 +27,21 @@ public class ClientHandler extends Thread implements MessageSender {
     private final Socket socket;
     private final ChatService chatService;
     private final SearchShareService searchShareService;
+    private final ChatRoomMemberRepository memberRepository;
     private BufferedReader in;
     private PrintWriter out;
     private String nickname;
     private Long userId;  // 로그인 연동 후 설정
     private Long roomId;  // JOIN 패킷에서 설정
 
-    public ClientHandler(Socket socket, ChatService chatService, SearchShareService searchShareService) {
+    public ClientHandler(Socket socket,
+                         ChatService chatService,
+                         SearchShareService searchShareService,
+                         ChatRoomMemberRepository memberRepository) {
         this.socket = socket;
         this.chatService = chatService;
         this.searchShareService = searchShareService;
+        this.memberRepository = memberRepository;
     }
 
     @Override
@@ -157,6 +164,14 @@ public class ClientHandler extends Thread implements MessageSender {
             chatService.removeClient(roomId, this);
             if (nickname != null) {
                 chatService.broadcastSystemMessage(roomId, nickname + "님이 퇴장했습니다.");
+            }
+            // 미독 메시지 기준점: 정상/비정상 종료 구분 없이 마지막 socket 종료 시각을 기록
+            if (userId != null && memberRepository != null) {
+                try {
+                    memberRepository.updateLastSeen(userId, roomId, LocalDateTime.now());
+                } catch (Exception e) {
+                    System.out.println("[경고] last_seen_at 갱신 실패: " + e.getMessage());
+                }
             }
         }
         if (nickname != null) System.out.println("[퇴장] " + nickname);

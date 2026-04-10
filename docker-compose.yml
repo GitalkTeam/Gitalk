@@ -23,6 +23,9 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
 
+    networks:
+      - gitalk-net
+
   mongodb:
     image: mongo:8.0
     container_name: mongodb-container
@@ -41,6 +44,33 @@ services:
 
     command:
       - --quiet
+
+    networks:
+      - gitalk-net
+
+  # Gitalk Chat Server (Docker Hub 에서 pull)
+  # 로컬 빌드 후 push:
+  #   docker buildx build --platform linux/amd64 -t seodongbe/gitalk-server:latest --push .
+  gitalk-server:
+    image: ${GITALK_IMAGE:-seodongbe/gitalk-server:latest}
+    container_name: gitalk-server
+    restart: always
+    depends_on:
+      - mysql
+      - mongodb
+    ports:
+      - "6000:6000"   # 채팅 socket
+      - "6001:6001"   # 이미지 업로드 HTTP
+      - "6002:6002"   # GitHub Webhook HTTP
+    volumes:
+      # config.properties 는 GCP 인스턴스 host 에 두고 read-only 로 mount
+      - ./config.properties:/app/out/config.properties:ro
+    networks:
+      - gitalk-net
+
+networks:
+  gitalk-net:
+    driver: bridge
 
 volumes:
   mysql-data:

@@ -1,0 +1,20 @@
+# 빌드 컨텍스트에서 제외할 것들
+.git
+.idea
+.vscode
+out
+*.iml
+*.log
+.DS_Store
+node_modules
+target
+build
+
+# 민감 정보 (이미지에 안 들어가야 함)
+src/main/resources/config.properties
+config/config.properties
+
+# README/메모
+*.md
+howto.txt
+test.txt

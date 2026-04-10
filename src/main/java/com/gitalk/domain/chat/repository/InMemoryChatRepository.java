@@ -2,12 +2,12 @@ package com.gitalk.domain.chat.repository;
 
 import com.gitalk.domain.chat.domain.Message;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 
 /** 인메모리 구현체 - 로컬 테스트용, DB 미연결 환경에서 사용 */
 public class InMemoryChatRepository implements MessageRepository {
@@ -29,5 +29,19 @@ public class InMemoryChatRepository implements MessageRepository {
         List<Message> all = store.getOrDefault(roomId, Collections.emptyList());
         int from = Math.max(0, all.size() - limit);
         return Collections.unmodifiableList(all.subList(from, all.size()));
+    }
+
+    @Override
+    public List<Message> findByRoomIdSince(Long roomId, LocalDateTime since, int limit) {
+        if (since == null) return Collections.emptyList();
+        List<Message> all = store.getOrDefault(roomId, Collections.emptyList());
+        List<Message> filtered = new ArrayList<>();
+        for (Message m : all) {
+            if (m.getCreatedAt() != null && m.getCreatedAt().isAfter(since)) {
+                filtered.add(m);
+            }
+        }
+        int from = Math.max(0, filtered.size() - limit);
+        return Collections.unmodifiableList(filtered.subList(from, filtered.size()));
     }
 }

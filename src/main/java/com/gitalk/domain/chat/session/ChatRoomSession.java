@@ -1,6 +1,8 @@
 package com.gitalk.domain.chat.session;
 
 import com.gitalk.common.api.ImageAsciiHttpServer;
+import com.gitalk.common.util.AppConfig;
+import com.gitalk.common.util.Layout;
 import com.gitalk.common.util.Screen;
 import com.gitalk.common.util.Spinner;
 import com.gitalk.domain.chat.search.domain.SearchExecutionContext;
@@ -10,7 +12,10 @@ import com.gitalk.domain.chat.search.util.SearchShareCodec;
 import com.gitalk.domain.chat.search.service.ChatSearchService;
 import com.gitalk.domain.chat.search.domain.SearchCommand;
 import com.gitalk.domain.chat.search.service.SearchSessionManager;
+import com.gitalk.domain.chat.domain.ChatRoom;
+import com.gitalk.domain.chat.domain.Message;
 import com.gitalk.domain.chat.service.ChatRoomService;
+import com.gitalk.domain.chat.service.MissedMessageService;
 import com.gitalk.domain.chat.service.NoticeService;
 import com.gitalk.domain.chat.service.Protocol;
 import com.gitalk.domain.chat.domain.Notice;
@@ -18,9 +23,10 @@ import com.gitalk.domain.chat.view.SearchView;
 import com.gitalk.domain.chatbot.model.NewsItem;
 import com.gitalk.domain.chatbot.model.TrendingRepo;
 import com.gitalk.domain.chatbot.model.WebhookEvent;
+import com.gitalk.common.api.GithubWebhookServer;
 import com.gitalk.domain.chatbot.service.NewsService;
 import com.gitalk.domain.chatbot.service.TrendingService;
-import com.gitalk.domain.chatbot.service.WebhookService;
+import com.gitalk.domain.chat.service.RepoService;
 import com.gitalk.domain.user.service.UserService;
 
 import org.jline.reader.EndOfFileException;
@@ -67,8 +73,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class ChatRoomSession {
 
-    private static final String HOST = "127.0.0.1";
+    /** 채팅 서버 host. config 의 chat.server.host (기본 127.0.0.1) */
+    private static final String HOST = resolveHost();
     private static final int    PORT = 6000;
+
+    private static String resolveHost() {
+        String host = AppConfig.get("chat.server.host");
+        return (host == null || host.isBlank()) ? "127.0.0.1" : host.trim();
+    }
 
     // ANSI 색상
     private static final String RESET  = "\033[0m";
@@ -83,7 +95,8 @@ public class ChatRoomSession {
 
     private final TrendingService  trendingService;
     private final NewsService      newsService;
-    private final WebhookService   webhookService;
+    private final RepoService      repoService;
+    private final GithubWebhookServer webhookServer;  // /repo events 조회용
     private final ChatRoomService  chatRoomService;
     private final UserService      userService;
     private final NoticeService    noticeService;
@@ -91,6 +104,7 @@ public class ChatRoomSession {
     private final ChatSearchService chatSearchService;
     private final SearchSessionManager searchSessionManager;
     private final SearchView searchView;
+    private final MissedMessageService missedMessageService;
     // 세션 컨텍스트 (enter() 동안만 유효)
     private LineReader lineReader;
     private Terminal   terminal;
@@ -98,7 +112,9 @@ public class ChatRoomSession {
     private Long currentRoomId;
     private Long currentUserId;
     private String currentNickname;
+    private String currentRoomName;
     private String currentRoomType;   // "TEAM" 또는 "OPEN" — 명령 권한 분기용
+    private String currentAccessToken;  // GitHub access_token (있을 때만, repo API 호출용)
 
     // 이미지(ASCII 아트) 수신 저장소 — 세션 동안 유지
     private final Map<String, String> asciiArtStore = new ConcurrentHashMap<>();
@@ -108,32 +124,57 @@ public class ChatRoomSession {
     private volatile boolean viewerActive = false;
     private final List<String> viewerBuffer = new ArrayList<>();
 
+    /**
+     * 직전에 화면에 그려진 채팅 메시지의 발신자.
+     * 같은 발신자가 연속으로 발화하면 시간/닉네임 헤더를 생략하고 들여쓰기만 한다.
+     * 시스템·봇·이미지 메시지는 그룹을 끊어주기 때문에 printToScroll 에서 null로 리셋.
+     */
+    private String lastDisplayedSender;
+
+    /** " 12:34  " 시간 컬럼 폭 (= 1 leading space + 5 time + 2 separator) */
+    private static final int CHAT_TIME_INDENT = 8;
+
+    /**
+     * lastDisplayedSender 에 봇 연속 출력을 표시하기 위한 sentinel.
+     * 사용자 닉네임에 등장할 수 없는 제어문자를 포함해서 충돌 방지.
+     */
+    private static final String BOT_SENDER_TAG = "\u0001BOT\u0001";
+
+    /** " 12:34  [봇]  " 봇 라인 prefix 의 표시 폭 = 1 + 5 + 2 + 4 + 2 = 14 */
+    private static final int BOT_PREFIX_WIDTH = 14;
+
     public ChatRoomSession(TrendingService trendingService,
                            NewsService newsService,
-                           WebhookService webhookService,
+                           RepoService repoService,
+                           GithubWebhookServer webhookServer,
                            ChatRoomService chatRoomService,
                            UserService userService,
                            NoticeService noticeService,
                            ChatSearchService chatSearchService,
                            SearchSessionManager searchSessionManager,
-                           SearchView searchView) {
+                           SearchView searchView,
+                           MissedMessageService missedMessageService) {
         this.trendingService = trendingService;
         this.newsService     = newsService;
-        this.webhookService  = webhookService;
+        this.repoService     = repoService;
+        this.webhookServer   = webhookServer;
         this.chatRoomService = chatRoomService;
         this.userService     = userService;
         this.noticeService   = noticeService;
         this.chatSearchService   = chatSearchService;
         this.searchSessionManager   = searchSessionManager;
         this.searchView   = searchView;
+        this.missedMessageService = missedMessageService;
     }
 
     // ── 진입점 ───────────────────────────────────────────────────────────────
 
-    public void enter(Long userId, String nickname, Long roomId, String roomName) {
+    public void enter(Long userId, String nickname, String accessToken, Long roomId, String roomName) {
         currentUserId = userId;
         currentRoomId = roomId;
         currentNickname = nickname;
+        currentAccessToken = accessToken;
+        currentRoomName = roomName;
         currentRoomType = chatRoomService.getRoom(roomId)
                 .map(r -> r.getType())
                 .orElse("TEAM");
@@ -173,21 +214,32 @@ public class ChatRoomSession {
             // JOIN
             out.println(Protocol.buildJoinPacket(userId, roomId, nickname));
             String response = in.readLine();
-            if (response == null || !isJoinSuccess(response)) return;
+            if (response == null) {
+                System.out.println(" 입장 실패: 서버가 응답하지 않습니다 (연결이 끊김).");
+                System.out.print(" 계속하려면 엔터를 누르세요...");
+                System.out.flush();
+                try { new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8)).readLine(); } catch (IOException ignored) {}
+                return;
+            }
+            if (!isJoinSuccess(response)) {
+                System.out.print(" 계속하려면 엔터를 누르세요...");
+                System.out.flush();
+                try { new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8)).readLine(); } catch (IOException ignored) {}
+                return;
+            }
 
             // 환영 배너 (LineReader 활성 전에 직접 터미널에 출력)
-            terminal.writer().println(BOLD + " ━━━ " + roomName + " ━━━" + RESET
-                    + "  " + DIM + "/quit 으로 퇴장" + RESET);
-            terminal.writer().println(DIM + " ─── 챗봇을 사용하려면 /help 를 입력하세요 ───" + RESET);
-            terminal.writer().flush();
+            printRoomBanner(roomId, roomName, terminal);
+
+            // 미독 메시지 알림 (한 줄)
+            notifyMissedOnEnter();
 
             // 수신 스레드
             Thread receiver = new Thread(() -> {
                 try {
                     String packet;
                     while ((packet = in.readLine()) != null) {
-                        String formatted = formatPacket(packet);
-                        if (!formatted.isEmpty()) printToScroll(formatted);
+                        handleIncomingPacket(packet);
                     }
                 } catch (IOException ignored) {}
             });
@@ -216,13 +268,22 @@ public class ChatRoomSession {
                     handleCommand(input.substring(1).trim(), nickname);
                 } else {
                     out.println(Protocol.buildMsgPacket(input));
-                    printToScroll(formatOwn(nickname, input));
+                    printChatMessage(nickname, input, true);
                 }
             }
 
         } catch (IOException e) {
             System.out.println("\n 채팅 서버 연결 실패: " + e.getMessage());
             System.out.println(" 서버가 실행 중인지 확인하세요. (bash run.sh server)");
+            System.out.print(" 계속하려면 엔터를 누르세요...");
+            System.out.flush();
+            try { new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8)).readLine(); } catch (IOException ignored) {}
+        } catch (RuntimeException e) {
+            System.out.println("\n 입장 중 예외 발생: " + e.getClass().getSimpleName() + " — " + e.getMessage());
+            e.printStackTrace(System.out);
+            System.out.print(" 계속하려면 엔터를 누르세요...");
+            System.out.flush();
+            try { new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8)).readLine(); } catch (IOException ignored) {}
         } finally {
             socketOut = null;
             lineReader = null;
@@ -230,7 +291,9 @@ public class ChatRoomSession {
             currentRoomId = null;
             currentUserId = null;
             currentNickname = null;
+            currentRoomName = null;
             currentRoomType = null;
+            currentAccessToken = null;
             Spinner.setSuppressed(false);
         }
     }
@@ -313,8 +376,8 @@ public class ChatRoomSession {
 
     // ── 출력 (JLine printAbove 위임) ────────────────────────────────────────
 
-    private synchronized void printToScroll(String text) {
-        // 뷰어가 떠 있는 동안에는 채팅 스크롤에 그리지 않고 버퍼링 → 뷰어 종료 시 한 번에 흘림
+    /** 저수준 출력: viewerBuffer / lineReader / System.out 으로 라우팅만 함. 그룹 추적 X. */
+    private synchronized void rawPrint(String text) {
         if (viewerActive) {
             viewerBuffer.add(text);
             return;
@@ -326,11 +389,73 @@ public class ChatRoomSession {
         }
     }
 
-    /** 챗봇 결과: 로컬에 [봇] 포맷으로 표시 + 다른 클라이언트에 BOT 패킷 릴레이 */
+    /** 시스템·알림 메시지 출력. 같은-사용자/봇 그룹화를 끊는다. */
+    private synchronized void printToScroll(String text) {
+        lastDisplayedSender = null;  // 시스템 메시지가 그룹 끊음
+        rawPrint(text);
+    }
+
+    /**
+     * 채팅 메시지 출력. 직전 발신자와 같으면 시간/닉네임 헤더를 생략하고 들여쓰기만 한다.
+     * isOwn=true 면 [나] 색상으로 표시.
+     */
+    private synchronized void printChatMessage(String sender, String content, boolean isOwn) {
+        boolean continuation = sender != null && sender.equals(lastDisplayedSender);
+        String line;
+        if (continuation) {
+            line = " ".repeat(CHAT_TIME_INDENT) + (content == null ? "" : content);
+        } else {
+            String time = LocalTime.now().format(TIME_FMT);
+            if (isOwn) {
+                line = " " + DIM + time + RESET
+                        + "  " + CYAN + BOLD + "[나] " + sender + RESET
+                        + "  " + (content == null ? "" : content);
+            } else {
+                line = " " + DIM + time + RESET
+                        + "  " + BOLD + "[" + sender + "]" + RESET
+                        + "  " + (content == null ? "" : content);
+            }
+        }
+        lastDisplayedSender = sender;
+        rawPrint(line);
+    }
+
+    /**
+     * 봇 출력. 길면 배너 width에 맞춰 wrap.
+     * 첫 줄: " 12:34  [봇]  내용..." / 다음 줄(또는 직전이 봇이면 모든 줄): 같은 컬럼 위치에 들여쓰기.
+     * 같은 봇 출력이 여러 차례 연속되면(트렌딩 결과 등) 두 번째 broadcast 부터는 헤더 없이 들여쓰기만.
+     */
+    private synchronized void printBotMessage(String content) {
+        if (content == null) content = "";
+        boolean continuation = BOT_SENDER_TAG.equals(lastDisplayedSender);
+
+        int width = bannerWidth();
+        int contentWidth = Math.max(20, width - BOT_PREFIX_WIDTH);
+        java.util.List<String> wrapped = Layout.wrapWords(content, contentWidth);
+
+        for (int i = 0; i < wrapped.size(); i++) {
+            String line;
+            if (i == 0 && !continuation) {
+                String time = LocalTime.now().format(TIME_FMT);
+                String prefix = " " + DIM + time + RESET + "  " + YELLOW + BOLD + "[봇]" + RESET + "  ";
+                line = prefix + wrapped.get(i);
+            } else {
+                line = " ".repeat(BOT_PREFIX_WIDTH) + wrapped.get(i);
+            }
+            rawPrint(line);
+        }
+        lastDisplayedSender = BOT_SENDER_TAG;
+    }
+
+    /** 채팅방 내부 컴포넌트들이 공통으로 쓰는 표시 폭. */
+    private int bannerWidth() {
+        if (terminal == null) return 70;
+        return Math.min(70, Math.max(40, terminal.getWidth() - 2));
+    }
+
+    /** 챗봇 결과: 로컬에 wrap+표시 + 다른 클라이언트에 BOT 패킷 릴레이 */
     private void broadcast(String line) {
-        String time = LocalTime.now().format(TIME_FMT);
-        String prefix = " " + DIM + time + RESET + "  " + YELLOW + BOLD + "[봇]" + RESET + "  ";
-        printToScroll(prefix + line);
+        printBotMessage(line);
         if (socketOut != null) socketOut.println(Protocol.buildBotPacket(line));
     }
 
@@ -344,13 +469,212 @@ public class ChatRoomSession {
         switch (main) {
             case "trend"   -> cmdTrend(arg);
             case "news"    -> cmdNews();
-            case "webhook" -> cmdWebhook(arg);
+            case "repo"    -> cmdRepo(arg);
             case "invite"  -> cmdInvite(arg);
             case "notice"  -> cmdNotice(arg);
             case "image"   -> cmdImage(arg);
             case "search"  -> cmdSearch(arg, nickname);
+            case "missed"  -> cmdMissed(arg);
             case "help"    -> cmdHelp();
             default        -> printToScroll(DIM + " 알 수 없는 명령어. /help 로 목록 확인" + RESET);
+        }
+    }
+
+    // ── 채팅방 배너 ────────────────────────────────────────────────────────
+
+    /**
+     * 입장 직후 채팅방 헤더 출력.
+     * 굵은 ruled 라인으로 감싼 박스 안에 방 이름·타입·인원·만든이를 가운데 정렬,
+     * 그 아래 단축 명령 안내 + 얇은 ruled 라인으로 마감.
+     */
+    private void printRoomBanner(Long roomId, String roomName, Terminal terminal) {
+        int width = Math.min(70, Math.max(40, terminal.getWidth() - 2));
+        String thick = "━".repeat(width);
+        String thin  = "─".repeat(width);
+
+        ChatRoom room = chatRoomService.getRoom(roomId).orElse(null);
+        String typeLabel  = "TEAM".equals(currentRoomType) ? "팀 채팅" : "오픈 채팅";
+        int memberCount   = chatRoomService.getMemberCount(roomId);
+        String creator    = (room != null && room.getCreatorNickname() != null)
+                ? room.getCreatorNickname() : "?";
+        String description = room != null ? room.getDescription() : null;
+
+        String metaLine = typeLabel + "  ·  " + memberCount + "명  ·  만든이 " + creator;
+
+        PrintWriter w = terminal.writer();
+        w.println(thick);
+        w.println(BOLD + Layout.center(roomName != null ? roomName : "(이름 없음)", width) + RESET);
+        w.println(DIM + Layout.center(metaLine, width) + RESET);
+        if (description != null && !description.isBlank()) {
+            w.println(DIM + Layout.center(description, width) + RESET);
+        }
+        w.println(thick);
+        w.println(DIM + "  /help  ·  /quit" + RESET);
+        w.println(thin);
+        w.flush();
+    }
+
+    // ── 미독 메시지 ────────────────────────────────────────────────────────
+
+    /** 입장 직후 한 줄 알림. 미독 0건이거나 last_seen NULL 이면 출력 없음. */
+    private void notifyMissedOnEnter() {
+        if (missedMessageService == null || currentUserId == null || currentRoomId == null) return;
+        try {
+            java.util.Optional<java.time.LocalDateTime> lastSeen =
+                    missedMessageService.getLastSeen(currentUserId, currentRoomId);
+            if (lastSeen.isEmpty()) return;
+            java.util.List<Message> missed =
+                    missedMessageService.findMissedForView(currentUserId, currentRoomId);
+            if (missed.isEmpty()) return;
+
+            String time = lastSeen.get().format(java.time.format.DateTimeFormatter.ofPattern("MM/dd HH:mm"));
+            int width = Math.min(70, Math.max(40, terminal.getWidth() - 2));
+            String thin = "─".repeat(width);
+
+            PrintWriter w = terminal.writer();
+            w.println(YELLOW + BOLD + " 🆕 " + missed.size()
+                    + "개의 새 메시지가 있습니다 (마지막 접속: " + time + ")" + RESET);
+            w.println(DIM + "    /missed 로 자세히 보기  ·  /missed summary 로 AI 요약" + RESET);
+            w.println(thin);
+            w.flush();
+        } catch (Exception e) {
+            // 미독 알림 실패는 입장을 막지 않음 — 무시
+        }
+    }
+
+    private void cmdMissed(String arg) {
+        if (missedMessageService == null) {
+            printToScroll(DIM + " 미독 메시지 서비스가 비활성화되어 있습니다." + RESET);
+            return;
+        }
+        String trimmed = arg == null ? "" : arg.trim().toLowerCase();
+        if (trimmed.isEmpty()) {
+            showMissedList();
+            return;
+        }
+        String[] parts = trimmed.split("\\s+");
+        switch (parts[0]) {
+            case "summary" -> showMissedSummary();
+            case "save"    -> saveMissed(parts.length > 1 ? parts[1] : "txt");
+            default        -> printToScroll(DIM + " 사용법: /missed | /missed summary | /missed save [md]" + RESET);
+        }
+    }
+
+    private void showMissedList() {
+        java.util.List<Message> missed =
+                missedMessageService.findMissedForView(currentUserId, currentRoomId);
+        if (missed.isEmpty()) {
+            printToScroll(DIM + " 놓친 메시지가 없습니다." + RESET);
+            return;
+        }
+        showInAltScreen("놓친 메시지 (" + missed.size() + "건)", w -> {
+            java.time.format.DateTimeFormatter fmt =
+                    java.time.format.DateTimeFormatter.ofPattern("MM/dd HH:mm");
+            for (Message m : missed) {
+                String time = m.getCreatedAt() != null ? m.getCreatedAt().format(fmt) : "(시간없음)";
+                String nick = m.getSenderNickname() != null ? m.getSenderNickname() : "?";
+                w.println(" " + DIM + time + RESET + "  " + BOLD + "[" + nick + "]" + RESET
+                        + "  " + (m.getContent() != null ? m.getContent() : ""));
+            }
+            if (missed.size() >= MissedMessageService.VIEW_LIMIT_COUNT) {
+                w.println();
+                w.println(DIM + " ⚠ 한도 초과로 최근 "
+                        + MissedMessageService.VIEW_LIMIT_COUNT + "건만 표시됨" + RESET);
+            }
+        });
+    }
+
+    private void showMissedSummary() {
+        java.util.List<Message> missed =
+                missedMessageService.findMissedForView(currentUserId, currentRoomId);
+        if (missed.isEmpty()) {
+            printToScroll(DIM + " 요약할 메시지가 없습니다." + RESET);
+            return;
+        }
+        printToScroll(DIM + " 🤖 AI 요약 생성 중..." + RESET);
+        String summary;
+        try {
+            summary = missedMessageService.summarizeWithAI(missed, currentRoomName);
+        } catch (Exception e) {
+            printToScroll(DIM + " 요약 실패: " + e.getMessage() + " — /missed 로 목록을 확인하세요." + RESET);
+            return;
+        }
+        showInAltScreen("AI 요약 (" + missed.size() + "건)", w -> {
+            for (String line : summary.split("\n")) {
+                w.println(" " + line);
+            }
+        });
+    }
+
+    private void saveMissed(String format) {
+        java.util.List<Message> missed =
+                missedMessageService.findMissedForExport(currentUserId, currentRoomId);
+        if (missed.isEmpty()) {
+            printToScroll(DIM + " 저장할 메시지가 없습니다." + RESET);
+            return;
+        }
+        try {
+            java.nio.file.Path path = missedMessageService.saveToDownloads(missed, currentRoomName, format);
+            printToScroll(GREEN + " ✓ 저장됨: " + path + RESET);
+            printToScroll(DIM + "    " + missed.size() + "개 메시지" + RESET);
+            if (missed.size() >= MissedMessageService.EXPORT_LIMIT_COUNT) {
+                printToScroll(DIM + " ⚠ 한도 초과로 최근 "
+                        + MissedMessageService.EXPORT_LIMIT_COUNT + "건만 저장됨" + RESET);
+            }
+        } catch (IllegalArgumentException e) {
+            printToScroll(DIM + " " + e.getMessage() + RESET);
+        } catch (Exception e) {
+            printToScroll(DIM + " 저장 실패: " + e.getMessage() + RESET);
+        }
+    }
+
+    /**
+     * 공용 alt screen 뷰어. 헤더/divider 그린 후 body 콜백을 실행, q+Enter로 닫음.
+     * 뷰어 동안 들어오는 메시지는 viewerBuffer에 보류됐다가 종료 시 드레인.
+     */
+    private void showInAltScreen(String title, java.util.function.Consumer<PrintWriter> body) {
+        if (terminal == null || lineReader == null) {
+            printToScroll(BOLD + " ─── " + title + " ───" + RESET);
+            return;
+        }
+        viewerActive = true;
+        try {
+            terminal.puts(org.jline.utils.InfoCmp.Capability.enter_ca_mode);
+            terminal.puts(org.jline.utils.InfoCmp.Capability.clear_screen);
+            terminal.flush();
+
+            PrintWriter w = terminal.writer();
+            int width = Math.min(70, Math.max(30, terminal.getWidth() - 2));
+            String div = "─".repeat(width);
+            w.println();
+            w.println(BOLD + Layout.center(title, width) + RESET);
+            w.println(div);
+            w.println();
+            body.accept(w);
+            w.println();
+            w.println(div);
+            w.flush();
+
+            try {
+                while (true) {
+                    String line = lineReader.readLine(DIM + "  q+Enter (또는 Enter): 닫기 > " + RESET);
+                    if (line == null) break;
+                    String t = sanitize(line);
+                    if (t.isEmpty() || "q".equalsIgnoreCase(t)) break;
+                }
+            } catch (UserInterruptException | EndOfFileException ignored) {}
+        } finally {
+            terminal.puts(org.jline.utils.InfoCmp.Capability.exit_ca_mode);
+            terminal.flush();
+            synchronized (this) {
+                if (lineReader != null) {
+                    for (String msg : viewerBuffer) {
+                        lineReader.printAbove(msg);
+                    }
+                }
+                viewerBuffer.clear();
+                viewerActive = false;
+            }
         }
     }
 
@@ -670,41 +994,212 @@ public class ChatRoomSession {
         }
     }
 
-    private void cmdWebhook(String sub) {
-        if (blockIfOpenRoom("웹훅")) return;
-        switch (sub.toLowerCase()) {
-            case "start" -> {
-                if (webhookService.isRunning()) {
-                    printToScroll(YELLOW + " 웹훅 서버가 이미 실행 중입니다." + RESET);
+    // ── /repo (팀 채팅 ↔ GitHub repo 연결) ───────────────────────────────
+
+    private void cmdRepo(String sub) {
+        if (blockIfOpenRoom("repo 연결")) return;
+        String trimmed = sub == null ? "" : sub.trim().toLowerCase();
+        if (trimmed.isEmpty()) {
+            showRepoInfo();
+            return;
+        }
+        switch (trimmed) {
+            case "connect"    -> connectRepo();
+            case "disconnect" -> disconnectRepo();
+            case "events"     -> showRepoEvents();
+            default -> printToScroll(DIM + " 사용법: /repo | /repo connect | /repo disconnect | /repo events" + RESET);
+        }
+    }
+
+    private void showRepoInfo() {
+        chatRoomService.getRoom(currentRoomId).ifPresentOrElse(room -> {
+            if (!room.hasRepo()) {
+                printToScroll(DIM + " 연결된 GitHub repo 가 없습니다. /repo connect 로 연결하세요." + RESET);
+                return;
+            }
+            try {
+                String token = currentUserAccessToken();
+                if (token == null) {
+                    printToScroll(DIM + " " + room.getTeamUrl() + RESET);
                     return;
                 }
-                try {
-                    webhookService.start(event -> {
-                        for (String line : event.toString().split("\n"))
-                            printToScroll(YELLOW + " [웹훅] " + line + RESET);
-                    });
-                    printToScroll(GREEN + " 웹훅 서버 시작됨" + RESET);
-                } catch (Exception e) {
-                    printToScroll(" 웹훅 시작 실패: " + e.getMessage());
+                RepoService.RepoInfo info = repoService.fetchRepoByUrl(room.getTeamUrl(), token);
+                printToScroll(BOLD + " [GitHub] 연결된 repo: " + info.fullName() + RESET);
+                if (info.description() != null) {
+                    printToScroll("    " + info.description());
                 }
+                printToScroll("    " + (info.language() != null ? info.language() + "  " : "")
+                        + "★ " + info.stars() + "  default: " + info.defaultBranch()
+                        + (info.isPrivate() ? "  (private)" : ""));
+                printToScroll(DIM + "    " + info.htmlUrl() + RESET);
+            } catch (Exception e) {
+                printToScroll(DIM + " 연결: " + room.getTeamUrl() + RESET);
+                printToScroll(DIM + " (GitHub 정보 조회 실패: " + e.getMessage() + ")" + RESET);
             }
-            case "stop" -> {
-                webhookService.stop();
-                printToScroll(DIM + " 웹훅 서버 중지됨" + RESET);
-            }
-            case "list" -> {
-                List<WebhookEvent> events = webhookService.getEvents();
-                if (events.isEmpty()) {
-                    printToScroll(DIM + " 수신된 웹훅 이벤트 없음" + RESET);
-                } else {
-                    printToScroll(BOLD + " ─── 웹훅 이벤트 ───" + RESET);
-                    for (WebhookEvent e : events)
-                        for (String line : e.toString().split("\n"))
-                            printToScroll(" " + line);
-                }
-            }
-            default -> printToScroll(" 사용법: /webhook start | stop | list");
+        }, () -> printToScroll(DIM + " 방 정보 조회 실패" + RESET));
+    }
+
+    private void connectRepo() {
+        // 1. 권한: 방장만
+        if (!chatRoomService.isCreator(currentRoomId, currentUserId)) {
+            printToScroll(DIM + " 방장만 repo 를 연결할 수 있습니다." + RESET);
+            return;
         }
+
+        // 2. GitHub 토큰 확인
+        String token = currentUserAccessToken();
+        if (token == null) {
+            printToScroll(DIM + " GitHub 연동이 필요합니다. 메인 메뉴에서 GitHub 로그인을 먼저 해주세요." + RESET);
+            return;
+        }
+
+        // 3. repo 목록 조회 + 선택 (alt screen 뷰어로 진행)
+        java.util.List<RepoService.RepoInfo> repos;
+        try {
+            printToScroll(DIM + " GitHub 에서 레포 목록을 가져오는 중..." + RESET);
+            repos = repoService.listMyRepos(token, 100);
+        } catch (Exception e) {
+            printToScroll(DIM + " 레포 목록 조회 실패: " + e.getMessage() + RESET);
+            return;
+        }
+        if (repos.isEmpty()) {
+            printToScroll(DIM + " 접근 가능한 레포가 없습니다." + RESET);
+            return;
+        }
+
+        RepoService.RepoInfo picked = pickRepoFromList(repos);
+        if (picked == null) {
+            printToScroll(DIM + " 연결 취소됨." + RESET);
+            return;
+        }
+
+        // 4. Webhook 자동 등록 + DB 갱신
+        try {
+            String payloadUrl = RepoService.resolveWebhookBaseUrl() + "/" + currentRoomId;
+            RepoService.WebhookRegistration reg = repoService.registerWebhook(picked, token, payloadUrl);
+            chatRoomService.linkRepo(currentRoomId, picked.htmlUrl(), reg.secret(), reg.hookId());
+            printToScroll(GREEN + " ✓ " + picked.fullName() + " 연결됨" + RESET);
+            printToScroll(DIM + "    Webhook 자동 등록 완료 (id=" + reg.hookId() + ")" + RESET);
+            printToScroll(DIM + "    Payload URL: " + payloadUrl + RESET);
+        } catch (Exception e) {
+            printToScroll(DIM + " Webhook 등록 실패: " + e.getMessage() + RESET);
+            printToScroll(DIM + " (admin:repo_hook scope + repo admin 권한이 필요합니다)" + RESET);
+        }
+    }
+
+    private RepoService.RepoInfo pickRepoFromList(java.util.List<RepoService.RepoInfo> repos) {
+        if (terminal == null || lineReader == null) return null;
+        viewerActive = true;
+        try {
+            terminal.puts(org.jline.utils.InfoCmp.Capability.enter_ca_mode);
+            terminal.puts(org.jline.utils.InfoCmp.Capability.clear_screen);
+            terminal.flush();
+
+            PrintWriter w = terminal.writer();
+            int width = bannerWidth();
+            String div = "─".repeat(width);
+            w.println();
+            w.println(BOLD + Layout.center("GitHub 레포 선택", width) + RESET);
+            w.println(div);
+            w.println();
+            for (int i = 0; i < repos.size(); i++) {
+                RepoService.RepoInfo r = repos.get(i);
+                String idx = Layout.padLeft((i + 1) + ".", 3);
+                String lang = r.language() != null ? r.language() : "-";
+                String priv = r.isPrivate() ? " (private)" : "";
+                w.println(" " + idx + " " + Layout.fit(r.fullName(), 32)
+                        + "  ★ " + r.stars() + "  " + lang + priv);
+            }
+            w.println();
+            w.println(div);
+            w.println(DIM + "  번호 선택  ·  0/q: 취소" + RESET);
+            w.flush();
+
+            try {
+                while (true) {
+                    String input = lineReader.readLine(DIM + "  선택 > " + RESET);
+                    if (input == null) return null;
+                    String t = sanitize(input);
+                    if (t.isEmpty() || "0".equals(t) || "q".equalsIgnoreCase(t)) return null;
+                    try {
+                        int n = Integer.parseInt(t);
+                        if (n >= 1 && n <= repos.size()) return repos.get(n - 1);
+                    } catch (NumberFormatException ignored) {}
+                }
+            } catch (UserInterruptException | EndOfFileException e) {
+                return null;
+            }
+        } finally {
+            terminal.puts(org.jline.utils.InfoCmp.Capability.exit_ca_mode);
+            terminal.flush();
+            synchronized (this) {
+                if (lineReader != null) {
+                    for (String msg : viewerBuffer) lineReader.printAbove(msg);
+                }
+                viewerBuffer.clear();
+                viewerActive = false;
+            }
+        }
+    }
+
+    private void disconnectRepo() {
+        if (!chatRoomService.isCreator(currentRoomId, currentUserId)) {
+            printToScroll(DIM + " 방장만 repo 연결을 해제할 수 있습니다." + RESET);
+            return;
+        }
+        chatRoomService.getRoom(currentRoomId).ifPresentOrElse(room -> {
+            if (!room.hasRepo()) {
+                printToScroll(DIM + " 연결된 repo 가 없습니다." + RESET);
+                return;
+            }
+            String token = currentUserAccessToken();
+            // 1) GitHub 측 webhook 제거 (실패해도 DB 정리는 진행)
+            if (token != null && room.getWebhookId() != null) {
+                try {
+                    String fullName = RepoService.parseRepoFullName(room.getTeamUrl());
+                    if (fullName == null) {
+                        printToScroll(DIM + " repo URL 파싱 실패: " + room.getTeamUrl() + RESET);
+                    } else {
+                        repoService.deleteWebhook(fullName, room.getWebhookId(), token);
+                    }
+                } catch (Exception e) {
+                    printToScroll(DIM + " GitHub webhook 삭제 실패: " + e.getMessage() + " (DB 는 정리합니다)" + RESET);
+                }
+            }
+            // 2) DB unlink
+            chatRoomService.unlinkRepo(currentRoomId);
+            printToScroll(GREEN + " ✓ repo 연결 해제됨" + RESET);
+        }, () -> printToScroll(DIM + " 방 정보 조회 실패" + RESET));
+    }
+
+    private void showRepoEvents() {
+        if (webhookServer == null) {
+            printToScroll(DIM + " webhook 서버가 비활성화되어 있습니다." + RESET);
+            return;
+        }
+        java.util.List<com.gitalk.domain.chatbot.model.WebhookEvent> events =
+                webhookServer.getRecentEvents(currentRoomId, 30);
+        if (events.isEmpty()) {
+            printToScroll(DIM + " 이 방에 수신된 GitHub 이벤트가 없습니다." + RESET);
+            return;
+        }
+        showInAltScreen("최근 GitHub 이벤트 (" + events.size() + "건)", w -> {
+            java.time.format.DateTimeFormatter fmt =
+                    java.time.format.DateTimeFormatter.ofPattern("MM/dd HH:mm");
+            for (com.gitalk.domain.chatbot.model.WebhookEvent e : events) {
+                String time = e.receivedAt() != null ? e.receivedAt().format(fmt) : "?";
+                w.println(" " + DIM + time + RESET + "  [" + e.type() + "/" + e.action() + "]  "
+                        + e.title() + "  by " + e.author());
+                if (e.url() != null && !e.url().isBlank()) {
+                    w.println("        " + DIM + e.url() + RESET);
+                }
+            }
+        });
+    }
+
+    /** 현재 세션 사용자의 GitHub access_token. 로컬 가입자는 null. */
+    private String currentUserAccessToken() {
+        return currentAccessToken;
     }
 
     private void cmdInvite(String email) {
@@ -798,7 +1293,7 @@ public class ChatRoomSession {
                 socketOut.println(Protocol.buildMsgPacket(packetMessage));
 
                 // 내 화면에도 바로 보이게 출력
-                printToScroll(formatOwn(nickname, shareMessage));
+                printChatMessage(nickname, shareMessage, true);
                 return;
             }
             if (command.isView()) {
@@ -833,70 +1328,240 @@ public class ChatRoomSession {
         }
     }
 
+    // ── 도움말 (카테고리 박스 → 번호 → 상세) ──────────────────────────────
+
+    /** 도움말 카테고리 정의 (icon · name · teamOnly · {커맨드, 설명} 쌍 배열) */
+    private record HelpCategory(String icon, String name, boolean teamOnly, String[][] commands) {}
+
+    private static final List<HelpCategory> HELP_CATEGORIES = List.of(
+            new HelpCategory("💬", "채팅", false, new String[][]{
+                    {"/help", "이 도움말 표시"},
+                    {"/quit", "채팅방 퇴장"},
+            }),
+            new HelpCategory("🤖", "챗봇", false, new String[][]{
+                    {"/trend [언어]", "GitHub 트렌딩 조회 (예: /trend python)"},
+                    {"/news", "Hacker News Top 5"},
+            }),
+            new HelpCategory("🖼", "이미지", false, new String[][]{
+                    {"/image", "이미지 업로드 → ASCII 아트 변환 후 방에 공유"},
+                    {"/image <N>.view", "수신한 N번 이미지 ASCII 아트 보기"},
+            }),
+            new HelpCategory("🔍", "검색", false, new String[][]{
+                    {"/search <키워드>", "현재 방 메시지 검색"},
+                    {"/search -r <방번호> <키워드>", "특정 방 메시지 검색"},
+                    {"/search -s", "최근 검색 결과 공유"},
+                    {"/search -v <shareId>", "공유된 검색 결과 보기"},
+            }),
+            new HelpCategory("📥", "미독 메시지", false, new String[][]{
+                    {"/missed", "놓친 메시지를 별도 화면에서 보기"},
+                    {"/missed summary", "놓친 메시지를 AI로 요약 (OpenAI)"},
+                    {"/missed save", "놓친 메시지를 ~/Downloads 에 txt 로 저장"},
+                    {"/missed save md", "놓친 메시지를 ~/Downloads 에 markdown 으로 저장"},
+            }),
+            new HelpCategory("👥", "멤버 초대", true, new String[][]{
+                    {"/invite <이메일>", "멤버 초대"},
+            }),
+            new HelpCategory("📢", "공지", true, new String[][]{
+                    {"/notice", "공지 목록 보기"},
+                    {"/notice <제목>", "공지 등록"},
+            }),
+            new HelpCategory("🔗", "GitHub", true, new String[][]{
+                    {"/repo", "현재 연결된 GitHub repo 정보 보기"},
+                    {"/repo connect", "방장만. GitHub repo 선택해서 연결 + 자동 webhook 등록"},
+                    {"/repo disconnect", "방장만. repo 연결 해제 + webhook 제거"},
+                    {"/repo events", "이 방에 도착한 최근 GitHub 이벤트 보기"},
+            })
+    );
+
     private void cmdHelp() {
-        boolean open = isOpenChatRoom();
-        String teamOnly = open ? DIM + " (팀 전용)" + RESET : "";
-        printToScroll(BOLD + " ─── 명령어 " + (open ? "(오픈 채팅)" : "(팀 채팅)") + " ───" + RESET);
-        printToScroll(" /notice             공지 목록 보기" + teamOnly);
-        printToScroll(" /notice <제목>      공지 등록" + teamOnly);
-        printToScroll(" /invite <이메일>    멤버 초대" + teamOnly);
-        printToScroll(" /trend [언어]       GitHub 트렌딩 조회  (예: /trend python)");
-        printToScroll(" /news               Hacker News Top 5");
-        printToScroll(" /webhook start      웹훅 서버 시작" + teamOnly);
-        printToScroll(" /webhook stop       웹훅 서버 중지" + teamOnly);
-        printToScroll(" /webhook list       웹훅 이벤트 목록" + teamOnly);
-        printToScroll(" /image              이미지 업로드 → ASCII 아트 변환 후 방에 공유");
-        printToScroll(" /image <N>.view     수신한 N번 이미지 ASCII 아트 보기");
-        printToScroll(" /search <키워드>    현재 방 메시지 검색");
-        printToScroll(" /search -r <방번호> <키워드>  특정 방 검색");
-        printToScroll(" /search -s         최근 검색 결과 공유");
-        printToScroll(" /search -v <shareId>  공유된 검색 결과 보기");
-        printToScroll(" /help               이 목록 표시");
-        printToScroll(" /quit               채팅방 퇴장");
+        // 헤드리스 환경(터미널/라인리더 미보유)이면 인라인 폴백
+        if (terminal == null || lineReader == null) {
+            cmdHelpInline();
+            return;
+        }
+
+        // OPEN 방에서는 팀 전용 카테고리 제외
+        List<HelpCategory> categories = new java.util.ArrayList<>();
+        for (HelpCategory c : HELP_CATEGORIES) {
+            if (!c.teamOnly() || !isOpenChatRoom()) {
+                categories.add(c);
+            }
+        }
+
+        viewerActive = true;
+        try {
+            terminal.puts(Capability.enter_ca_mode);
+            Integer selected = null;  // null = 카테고리 목록 화면, 1..N = 상세 화면
+            while (true) {
+                terminal.puts(Capability.clear_screen);
+                terminal.flush();
+
+                if (selected == null) {
+                    drawHelpCategoryList(categories);
+                } else {
+                    drawHelpCategoryDetail(categories.get(selected - 1));
+                }
+
+                String prompt = (selected == null)
+                        ? DIM + "  번호 선택  ·  Enter/q: 닫기 > " + RESET
+                        : DIM + "  Enter: 카테고리 목록  ·  q: 닫기 > " + RESET;
+
+                String input;
+                try {
+                    input = lineReader.readLine(prompt);
+                } catch (UserInterruptException | EndOfFileException e) {
+                    break;
+                }
+                if (input == null) break;
+
+                String t = sanitize(input);
+
+                if ("q".equalsIgnoreCase(t)) {
+                    break;
+                }
+                if (t.isEmpty()) {
+                    if (selected == null) break;     // 목록에서 Enter → 닫기
+                    selected = null;                  // 상세에서 Enter → 목록으로
+                    continue;
+                }
+                if (selected == null) {
+                    try {
+                        int n = Integer.parseInt(t);
+                        if (n >= 1 && n <= categories.size()) {
+                            selected = n;
+                        }
+                    } catch (NumberFormatException ignored) {}
+                }
+                // 상세 화면에서의 숫자 입력은 무시
+            }
+        } finally {
+            terminal.puts(Capability.exit_ca_mode);
+            terminal.flush();
+            synchronized (this) {
+                if (lineReader != null) {
+                    for (String msg : viewerBuffer) {
+                        lineReader.printAbove(msg);
+                    }
+                }
+                viewerBuffer.clear();
+                viewerActive = false;
+            }
+        }
     }
 
-    // ── 출력 포맷 ─────────────────────────────────────────────────────────────
+    private void drawHelpCategoryList(List<HelpCategory> categories) {
+        PrintWriter w = terminal.writer();
+        int width = Math.min(64, Math.max(30, terminal.getWidth() - 2));
+        String div = "─".repeat(width);
 
-    private String formatPacket(String packet) {
-        String[] parts = Protocol.parse(packet);
-        String time = LocalTime.now().format(TIME_FMT);
-        return switch (parts[0]) {
-            case Protocol.MSG -> {
-                if (parts.length < 3) {
-                    yield "";
-                }
-                SearchShareCodec.ParsedSharedMessage parsed = SearchShareCodec.parseMessage(parts[2]);
-                if (parsed.hasSharedSession()) {
-                    searchSessionManager.saveShared(parsed.getShareId(), parsed.getSession());
-                }
-                yield " " + DIM + time + RESET + "  " + BOLD + "[" + parts[1] + "]" + RESET + "  " + parsed.getVisibleMessage();
+        w.println();
+        w.println(BOLD + Layout.center("Gitalk 명령어 도움말", width) + RESET);
+        w.println(div);
+        w.println();
+
+        for (int i = 0; i < categories.size(); i++) {
+            HelpCategory c = categories.get(i);
+            String idx = Layout.padLeft((i + 1) + ".", 3);
+            String suffix = c.teamOnly() ? DIM + "  (팀 전용)" + RESET : "";
+            w.println("  " + idx + "  " + c.icon() + "  " + c.name() + suffix);
+        }
+
+        w.println();
+        w.println(div);
+        w.flush();
+    }
+
+    private void drawHelpCategoryDetail(HelpCategory c) {
+        PrintWriter w = terminal.writer();
+        int width = Math.min(64, Math.max(30, terminal.getWidth() - 2));
+        String div = "─".repeat(width);
+
+        w.println();
+        w.println(BOLD + Layout.center(c.icon() + "  " + c.name(), width) + RESET);
+        w.println(div);
+        w.println();
+
+        // 커맨드 컬럼 폭 계산
+        int maxCmdWidth = 0;
+        for (String[] cmd : c.commands()) {
+            maxCmdWidth = Math.max(maxCmdWidth, Layout.displayWidth(cmd[0]));
+        }
+        int cmdColumn = maxCmdWidth + 2;
+
+        for (String[] cmd : c.commands()) {
+            String cmdCell = Layout.fit(cmd[0], cmdColumn);
+            w.println("  " + CYAN + BOLD + cmdCell + RESET + "  " + cmd[1]);
+        }
+
+        w.println();
+        w.println(div);
+        w.flush();
+    }
+
+    /** 헤드리스(터미널/라인리더 미보유) 환경용 단순 인라인 도움말 */
+    private void cmdHelpInline() {
+        boolean open = isOpenChatRoom();
+        printToScroll(BOLD + " ─── 명령어 " + (open ? "(오픈 채팅)" : "(팀 채팅)") + " ───" + RESET);
+        for (HelpCategory c : HELP_CATEGORIES) {
+            if (c.teamOnly() && open) continue;
+            printToScroll(BOLD + " " + c.icon() + " " + c.name() + RESET);
+            for (String[] cmd : c.commands()) {
+                printToScroll("   " + CYAN + cmd[0] + RESET + "  " + cmd[1]);
             }
-            case Protocol.BOT -> parts.length >= 2
-                    ? " " + DIM + time + RESET + "  " + YELLOW + BOLD + "[봇]" + RESET + "  " + parts[1]
-                    : "";
-            case Protocol.SERVER -> parts.length >= 2
-                    ? DIM + " ─── " + parts[1] + " ───" + RESET
-                    : "";
-            case Protocol.ASCII_ART -> {
-                if (parts.length < 4) yield "";
+        }
+    }
+
+    // ── 수신 패킷 디스패처 ──────────────────────────────────────────────────
+
+    /**
+     * 서버에서 받은 한 라인을 타입별로 분기해서 적절한 print 메서드로 보낸다.
+     * MSG 만 같은-사용자 그룹화(printChatMessage)를 거치고, 나머지는 그룹을 끊는다.
+     */
+    private void handleIncomingPacket(String packet) {
+        String[] parts = Protocol.parse(packet);
+        if (parts.length == 0 || parts[0] == null) return;
+        String type = parts[0];
+
+        if (Protocol.MSG.equals(type)) {
+            if (parts.length < 3) return;
+            SearchShareCodec.ParsedSharedMessage parsed = SearchShareCodec.parseMessage(parts[2]);
+            if (parsed.hasSharedSession()) {
+                searchSessionManager.saveShared(parsed.getShareId(), parsed.getSession());
+            }
+            printChatMessage(parts[1], parsed.getVisibleMessage(), false);
+            return;
+        }
+
+        if (Protocol.BOT.equals(type)) {
+            if (parts.length >= 2) {
+                printBotMessage(parts[1]);
+            }
+            return;
+        }
+
+        if (Protocol.SERVER.equals(type)) {
+            if (parts.length >= 2) {
+                printToScroll(DIM + " ─── " + parts[1] + " ───" + RESET);
+            }
+            return;
+        }
+
+        if (Protocol.ASCII_ART.equals(type)) {
+            if (parts.length >= 4) {
                 String sender   = parts[1];
                 String filename = parts[2];
                 String art      = Protocol.decodeAsciiArt(parts[3]);
                 String idx      = String.valueOf(imageCounter.incrementAndGet());
                 asciiArtStore.put(idx, art);
-                yield " " + DIM + time + RESET + "  " + YELLOW + BOLD + "[" + sender + "]" + RESET
+                String time     = LocalTime.now().format(TIME_FMT);
+                String notice   = " " + DIM + time + RESET + "  " + YELLOW + BOLD + "[" + sender + "]" + RESET
                         + " 이(가) " + filename + " 이미지를 보냈습니다.  "
                         + DIM + "→ /image " + idx + ".view" + RESET;
+                printToScroll(notice);
             }
-            default -> "";
-        };
-    }
-
-    private String formatOwn(String nickname, String content) {
-        String time = LocalTime.now().format(TIME_FMT);
-        return " " + DIM + time + RESET
-                + "  " + CYAN + BOLD + "[나] " + nickname + RESET
-                + "  " + content;
+            return;
+        }
+        // 알 수 없는 타입은 무시
     }
 
     // ── 유틸 ─────────────────────────────────────────────────────────────────

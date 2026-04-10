@@ -18,4 +18,7 @@ public interface ChatRoomRepository {
 
     /** 이름 부분 일치(대소문자 무시) 검색, OPEN 방 한정 */
     List<ChatRoom> searchOpenRoomsByName(String keyword, int limit);
+
+    /** repo 연결: team_url + webhook_secret + webhook_id 한 번에 갱신. webhook_id null 가능. */
+    void updateRepoLink(Long roomId, String teamUrl, String webhookSecret, Long webhookId);
 }

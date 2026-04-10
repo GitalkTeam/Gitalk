@@ -23,22 +23,25 @@ CREATE TABLE IF NOT EXISTS users (
 -- OPEN 타입은 같은 이름으로 중복 생성 불가 (TEAM은 자유)
 -- 함수형 유니크 인덱스: TEAM 행은 NULL로 평가되어 중복 허용
 CREATE TABLE IF NOT EXISTS chat_rooms (
-                                          roomid      BIGINT AUTO_INCREMENT PRIMARY KEY,
-                                          name        VARCHAR(255) NOT NULL,
-    type        ENUM('TEAM', 'OPEN') NOT NULL,
-    team_url    VARCHAR(255),
-    description VARCHAR(500),                  -- OPEN 방 토픽 설명 (TEAM은 NULL)
-    creator_id  BIGINT,
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                          roomid          BIGINT AUTO_INCREMENT PRIMARY KEY,
+                                          name            VARCHAR(255) NOT NULL,
+    type            ENUM('TEAM', 'OPEN') NOT NULL,
+    team_url        VARCHAR(255),                    -- TEAM 방의 GitHub repo URL (선택)
+    webhook_secret  VARCHAR(64),                     -- 방 단위 HMAC secret (자동 발급)
+    webhook_id      BIGINT,                          -- GitHub 쪽 webhook id (자동 해제용)
+    description     VARCHAR(500),                    -- OPEN 방 토픽 설명 (TEAM은 NULL)
+    creator_id      BIGINT,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uq_open_room_name ((CASE WHEN type = 'OPEN' THEN name END)),
     FOREIGN KEY (creator_id) REFERENCES users(userid) ON DELETE SET NULL
     );
 
 -- chat_room_members
 CREATE TABLE IF NOT EXISTS chat_room_members (
-                                                 id      BIGINT AUTO_INCREMENT PRIMARY KEY,
-                                                 userid  BIGINT NOT NULL,
-                                                 roomid  BIGINT NOT NULL,
+                                                 id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+                                                 userid       BIGINT NOT NULL,
+                                                 roomid       BIGINT NOT NULL,
+                                                 last_seen_at TIMESTAMP NULL,             -- 마지막 socket 종료 시각 (미독 메시지 기준점)
                                                  UNIQUE KEY uq_user_room (userid, roomid),
     FOREIGN KEY (userid) REFERENCES users(userid) ON DELETE CASCADE,
     FOREIGN KEY (roomid) REFERENCES chat_rooms(roomid) ON DELETE CASCADE
