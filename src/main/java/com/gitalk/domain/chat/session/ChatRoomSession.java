@@ -3,10 +3,18 @@ package com.gitalk.domain.chat.session;
 import com.gitalk.common.api.ImageAsciiHttpServer;
 import com.gitalk.common.util.Screen;
 import com.gitalk.common.util.Spinner;
+import com.gitalk.domain.chat.search.domain.SearchExecutionContext;
+import com.gitalk.domain.chat.search.domain.SearchSession;
+import com.gitalk.domain.chat.search.util.SearchCommandParser;
+import com.gitalk.domain.chat.search.util.SearchShareCodec;
+import com.gitalk.domain.chat.search.service.ChatSearchService;
+import com.gitalk.domain.chat.search.domain.SearchCommand;
+import com.gitalk.domain.chat.search.service.SearchSessionManager;
 import com.gitalk.domain.chat.service.ChatRoomService;
 import com.gitalk.domain.chat.service.NoticeService;
 import com.gitalk.domain.chat.service.Protocol;
 import com.gitalk.domain.chat.domain.Notice;
+import com.gitalk.domain.chat.view.SearchView;
 import com.gitalk.domain.chatbot.model.NewsItem;
 import com.gitalk.domain.chatbot.model.TrendingRepo;
 import com.gitalk.domain.chatbot.model.WebhookEvent;
@@ -80,6 +88,9 @@ public class ChatRoomSession {
     private final UserService      userService;
     private final NoticeService    noticeService;
 
+    private final ChatSearchService chatSearchService;
+    private final SearchSessionManager searchSessionManager;
+    private final SearchView searchView;
     // 세션 컨텍스트 (enter() 동안만 유효)
     private LineReader lineReader;
     private Terminal   terminal;
@@ -101,13 +112,19 @@ public class ChatRoomSession {
                            WebhookService webhookService,
                            ChatRoomService chatRoomService,
                            UserService userService,
-                           NoticeService noticeService) {
+                           NoticeService noticeService,
+                           ChatSearchService chatSearchService,
+                           SearchSessionManager searchSessionManager,
+                           SearchView searchView) {
         this.trendingService = trendingService;
         this.newsService     = newsService;
         this.webhookService  = webhookService;
         this.chatRoomService = chatRoomService;
         this.userService     = userService;
         this.noticeService   = noticeService;
+        this.chatSearchService   = chatSearchService;
+        this.searchSessionManager   = searchSessionManager;
+        this.searchView   = searchView;
     }
 
     // ── 진입점 ───────────────────────────────────────────────────────────────
@@ -206,8 +223,68 @@ public class ChatRoomSession {
             socketOut = null;
             lineReader = null;
             terminal = null;
+            currentRoomId = null;
+            currentUserId = null;
             currentNickname = null;
             Spinner.setSuppressed(false);
+        }
+    }
+
+    public void handleOutsideRoomCommand(Long userId, String nickname, String rawCommand) {
+        String command = sanitize(rawCommand);
+        if (command.isEmpty()) {
+            return;
+        }
+
+        if (command.startsWith("/")) {
+            command = command.substring(1).trim();
+        }
+
+        String[] parts = command.split("\\s+", 2);
+        String main = parts[0].toLowerCase();
+        String arg = parts.length > 1 ? parts[1].trim() : "";
+
+        if (!"search".equals(main)) {
+            System.out.println(" 채팅방 밖에서는 /search 명령만 사용할 수 있습니다.");
+            return;
+        }
+
+        runOutsideRoomCommandWithViewer(() ->
+                executeSearchCommand(arg, nickname, userId, null, false));
+    }
+
+    private void runOutsideRoomCommandWithViewer(Runnable action) {
+        if (terminal != null && lineReader != null) {
+            action.run();
+            return;
+        }
+
+        Terminal previousTerminal = terminal;
+        LineReader previousLineReader = lineReader;
+
+        try (Terminal tempTerminal = TerminalBuilder.builder()
+                .system(true)
+                .name("gitalk-search")
+                .encoding(StandardCharsets.UTF_8)
+                .build()) {
+
+            LineReader tempReader = LineReaderBuilder.builder()
+                    .terminal(tempTerminal)
+                    .option(LineReader.Option.DISABLE_EVENT_EXPANSION, true)
+                    .option(LineReader.Option.HISTORY_BEEP, false)
+                    .option(LineReader.Option.ERASE_LINE_ON_FINISH, true)
+                    .option(LineReader.Option.AUTO_FRESH_LINE, true)
+                    .build();
+
+            terminal = tempTerminal;
+            lineReader = tempReader;
+            action.run();
+        } catch (IOException e) {
+            System.out.println(" 검색 화면을 여는 중 오류가 발생했습니다: " + e.getMessage());
+            action.run();
+        } finally {
+            lineReader = previousLineReader;
+            terminal = previousTerminal;
         }
     }
 
@@ -248,6 +325,7 @@ public class ChatRoomSession {
             case "invite"  -> cmdInvite(arg);
             case "notice"  -> cmdNotice(arg);
             case "image"   -> cmdImage(arg);
+            case "search"  -> cmdSearch(arg, nickname);
             case "help"    -> cmdHelp();
             default        -> printToScroll(DIM + " 알 수 없는 명령어. /help 로 목록 확인" + RESET);
         }
@@ -429,6 +507,63 @@ public class ChatRoomSession {
         }
     }
 
+    private void showSearchResult(String title, String content) {
+        String safeTitle = (title == null || title.isBlank()) ? "결과" : title.trim();
+        String body = content == null ? "" : content;
+
+        if (terminal == null || lineReader == null) {
+            printToScroll(BOLD + " ===== " + safeTitle + " =====" + RESET);
+            for (String line : body.split("\n", -1)) {
+                printToScroll(line);
+            }
+            printToScroll(BOLD + " =========================" + RESET);
+            return;
+        }
+
+        viewerActive = true;
+        try {
+            terminal.puts(Capability.enter_ca_mode);
+            terminal.puts(Capability.clear_screen);
+            terminal.flush();
+
+            PrintWriter w = terminal.writer();
+            int width = Math.min(80, Math.max(20, terminal.getWidth()));
+            String div = "=".repeat(width);
+            w.println();
+            w.println(BOLD + " " + safeTitle + RESET);
+            w.println(div);
+            w.print(body);
+            if (!body.endsWith("\n")) {
+                w.println();
+            }
+            w.println(div);
+            w.flush();
+
+            try {
+                while (true) {
+                    String line = lineReader.readLine(DIM + " q+Enter (또는 Enter) 로 채팅방으로 돌아가기 > " + RESET);
+                    if (line == null) break;
+                    String t = sanitize(line);
+                    if (t.isEmpty() || "q".equalsIgnoreCase(t)) break;
+                }
+            } catch (UserInterruptException | EndOfFileException ignored) {
+            }
+        } finally {
+            terminal.puts(Capability.exit_ca_mode);
+            terminal.flush();
+
+            synchronized (this) {
+                if (lineReader != null) {
+                    for (String msg : viewerBuffer) {
+                        lineReader.printAbove(msg);
+                    }
+                }
+                viewerBuffer.clear();
+                viewerActive = false;
+            }
+        }
+    }
+
     private static String detectContentType(File file) {
         String name = file.getName().toLowerCase();
         if (name.endsWith(".png"))  return "image/png";
@@ -596,6 +731,81 @@ public class ChatRoomSession {
         }
     }
 
+    private void cmdSearch(String arg, String nickname) {
+        executeSearchCommand(arg, nickname, currentUserId, currentRoomId, currentRoomId != null);
+    }
+
+    private void executeSearchCommand(String arg,
+                                      String nickname,
+                                      Long userId,
+                                      Long roomId,
+                                      boolean joinedCurrentRoom) {
+        try {
+
+            SearchCommand command = SearchCommandParser.parse(arg);
+
+            if (command.isHelp()) {
+                showSearchResult("Search Help", searchView.helpText());
+                return;
+            }
+
+            if (command.isShare()) {
+                SearchSession session = searchSessionManager.get(userId);
+                if (session == null) {
+                    printToScroll(DIM + " 최근 검색 내역이 없습니다." + RESET);
+                    return;
+                }
+
+                if (!joinedCurrentRoom || roomId == null) {
+                    printToScroll(DIM + " 채팅방 안에서만 검색 결과를 공유할 수 있습니다." + RESET);
+                    return;
+                }
+
+                String shareId = searchSessionManager.share(session);
+
+                String shareMessage = "[검색공유] " + nickname
+                        + "님이 검색 결과를 공유했습니다. /search --view " + shareId;
+                String packetMessage = SearchShareCodec.appendPayload(shareMessage, shareId, session);
+
+                // 서버로 일반 채팅 메시지처럼 전송
+                socketOut.println(Protocol.buildMsgPacket(packetMessage));
+
+                // 내 화면에도 바로 보이게 출력
+                printToScroll(formatOwn(nickname, shareMessage));
+                return;
+            }
+            if (command.isView()) {
+                SearchSession sharedSession = searchSessionManager.getShared(command.getShareId());
+                if (sharedSession == null) {
+                    printToScroll(DIM + " 공유된 검색 결과를 찾을 수 없습니다: " + command.getShareId() + RESET);
+                    return;
+                }
+
+                String rendered = searchView.render(sharedSession);
+                showSearchResult("Shared Search - " + command.getShareId(), rendered);
+                printToScroll(GREEN + " 공유 검색 결과를 화면에 표시했습니다." + RESET);
+                return;
+            }
+            SearchExecutionContext context = new SearchExecutionContext(
+                    userId,
+                    nickname,
+                    roomId,
+                    joinedCurrentRoom
+            );
+
+            SearchSession session = chatSearchService.search(command, context);
+            searchSessionManager.save(session);
+
+            String rendered = searchView.render(session);
+            showSearchResult("Search Result - " + session.getKeyword(), rendered);
+
+            printToScroll(GREEN + " 검색 결과를 화면에 표시했습니다." + RESET);
+
+        } catch (Exception e) {
+            printToScroll(DIM + " 검색 처리 중 오류: " + e.getMessage() + RESET);
+        }
+    }
+
     private void cmdHelp() {
         printToScroll(BOLD + " ─── 명령어 ───" + RESET);
         printToScroll(" /notice             공지 목록 보기");
@@ -608,6 +818,10 @@ public class ChatRoomSession {
         printToScroll(" /webhook list       웹훅 이벤트 목록");
         printToScroll(" /image              이미지 업로드 → ASCII 아트 변환 후 방에 공유");
         printToScroll(" /image <N>.view     수신한 N번 이미지 ASCII 아트 보기");
+        printToScroll(" /search <키워드>    현재 방 메시지 검색");
+        printToScroll(" /search -r <방번호> <키워드>  특정 방 검색");
+        printToScroll(" /search -s         최근 검색 결과 공유");
+        printToScroll(" /search -v <shareId>  공유된 검색 결과 보기");
         printToScroll(" /help               이 목록 표시");
         printToScroll(" /quit               채팅방 퇴장");
     }
@@ -618,9 +832,16 @@ public class ChatRoomSession {
         String[] parts = Protocol.parse(packet);
         String time = LocalTime.now().format(TIME_FMT);
         return switch (parts[0]) {
-            case Protocol.MSG -> parts.length >= 3
-                    ? " " + DIM + time + RESET + "  " + BOLD + "[" + parts[1] + "]" + RESET + "  " + parts[2]
-                    : "";
+            case Protocol.MSG -> {
+                if (parts.length < 3) {
+                    yield "";
+                }
+                SearchShareCodec.ParsedSharedMessage parsed = SearchShareCodec.parseMessage(parts[2]);
+                if (parsed.hasSharedSession()) {
+                    searchSessionManager.saveShared(parsed.getShareId(), parsed.getSession());
+                }
+                yield " " + DIM + time + RESET + "  " + BOLD + "[" + parts[1] + "]" + RESET + "  " + parsed.getVisibleMessage();
+            }
             case Protocol.BOT -> parts.length >= 2
                     ? " " + DIM + time + RESET + "  " + YELLOW + BOLD + "[봇]" + RESET + "  " + parts[1]
                     : "";

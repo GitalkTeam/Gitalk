@@ -1,9 +1,12 @@
 package com.gitalk.domain.chat.socket;
 
 import com.gitalk.domain.chat.domain.Message;
+import com.gitalk.domain.chat.search.domain.SearchSession;
+import com.gitalk.domain.chat.search.util.SearchSessionCodec;
 import com.gitalk.domain.chat.service.ChatService;
 import com.gitalk.domain.chat.service.MessageSender;
 import com.gitalk.domain.chat.service.Protocol;
+import com.gitalk.domain.chat.search.service.SearchShareService;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -21,15 +24,17 @@ public class ClientHandler extends Thread implements MessageSender {
 
     private final Socket socket;
     private final ChatService chatService;
+    private final SearchShareService searchShareService;
     private BufferedReader in;
     private PrintWriter out;
     private String nickname;
     private Long userId;  // 로그인 연동 후 설정
     private Long roomId;  // JOIN 패킷에서 설정
 
-    public ClientHandler(Socket socket, ChatService chatService) {
+    public ClientHandler(Socket socket, ChatService chatService, SearchShareService searchShareService) {
         this.socket = socket;
         this.chatService = chatService;
+        this.searchShareService = searchShareService;
     }
 
     @Override
@@ -90,19 +95,61 @@ public class ClientHandler extends Thread implements MessageSender {
             if (Protocol.QUIT.equals(type)) break;
 
             if (Protocol.MSG.equals(type)) {
-                String[] parts = Protocol.parse(packet);
-                if (parts.length >= 2 && !parts[1].isBlank()) {
-                    Message msg = new Message(userId, nickname, parts[1], roomId);
+                String content = Protocol.extractClientMessageContent(packet);
+                if (!content.isBlank()) {
+                    Message msg = new Message(userId, nickname, content, roomId);
                     chatService.broadcast(msg, this);
-                    System.out.println("[채팅 roomId=" + roomId + "] " + nickname + ": " + parts[1]);
+                    System.out.println("[채팅 roomId=" + roomId + "] " + nickname + ": " + content);
                 }
             } else if (Protocol.BOT.equals(type)) {
-                String[] parts = Protocol.parse(packet);
-                if (parts.length >= 2) {
-                    chatService.broadcastBot(roomId, Protocol.buildBotPacket(parts[1]), this);
+                String content = Protocol.extractBotContent(packet);
+                if (!content.isBlank()) {
+                    chatService.broadcastBot(roomId, Protocol.buildBotPacket(content), this);
                 }
+            } else if (Protocol.SEARCH_SHARE.equals(type)) {
+                handleSearchShare(packet);
+            } else if (Protocol.SEARCH_VIEW.equals(type)) {
+                handleSearchView(packet);
             }
         }
+    }
+
+    private void handleSearchShare(String packet) {
+        try {
+            String encodedSession = Protocol.extractSearchSharePayload(packet);
+            if (encodedSession.isBlank()) {
+                sendRaw(Protocol.buildSearchErrorPacket("공유할 검색 결과가 없습니다."));
+                return;
+            }
+
+            SearchSession session = SearchSessionCodec.decode(encodedSession);
+            String shareId = searchShareService.shareSession(session);
+            sendRaw(Protocol.buildSearchSharedPacket(shareId));
+
+            String shareMessage = "[검색공유] " + nickname
+                    + "님이 검색 결과를 공유했습니다. /search --view " + shareId;
+            Message msg = new Message(userId, nickname, shareMessage, roomId);
+            chatService.broadcast(msg, this);
+        } catch (Exception e) {
+            sendRaw(Protocol.buildSearchErrorPacket("검색 결과 공유 실패: " + e.getMessage()));
+        }
+    }
+
+    private void handleSearchView(String packet) {
+        String shareId = Protocol.extractSearchViewShareId(packet);
+        if (shareId.isBlank()) {
+            sendRaw(Protocol.buildSearchErrorPacket("공유 ID를 입력하세요."));
+            return;
+        }
+
+        SearchSession session = searchShareService.getSharedSession(shareId);
+        if (session == null) {
+            sendRaw(Protocol.buildSearchErrorPacket("공유된 검색 결과를 찾을 수 없습니다: " + shareId));
+            return;
+        }
+
+        String encodedSession = SearchSessionCodec.encode(session);
+        sendRaw(Protocol.buildSearchViewResultPacket(shareId, encodedSession));
     }
 
     private void disconnect() {

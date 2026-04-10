@@ -7,8 +7,8 @@ import java.security.MessageDigest;
 import java.util.Optional;
 
 /**
- * UserService Description :
- * NOTE :
+ * UserService Description : 일반 회원 가입, 비밀번호 암호화, 로그인 검증을 처리하는 사용자 서비스입니다.
+ * NOTE : service 계층 클래스이며, LOCAL 계정 정책을 관리하고 실제 저장은 UserRepository에 위임합니다.
  *
  * @author jki
  * @since 04-07 (화) 오후 2:47

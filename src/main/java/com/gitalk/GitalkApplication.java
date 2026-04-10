@@ -2,22 +2,23 @@ package com.gitalk;
 
 import com.gitalk.common.util.Layout;
 import com.gitalk.common.view.MainView;
+import com.gitalk.domain.chat.config.MongoConnectionManager;
 import com.gitalk.domain.chat.domain.ChatRoom;
 import com.gitalk.domain.chat.domain.Notice;
-import com.gitalk.domain.chat.repository.ChatRoomMemberRepositoryImpl;
-import com.gitalk.domain.chat.repository.ChatRoomRepositoryImpl;
-import com.gitalk.domain.chat.repository.NoticeRepositoryImpl;
+import com.gitalk.domain.chat.repository.*;
+import com.gitalk.domain.chat.search.service.ChatSearchService;
+import com.gitalk.domain.chat.search.service.SearchSessionManager;
 import com.gitalk.domain.chat.service.ChatRoomService;
+import com.gitalk.domain.chat.service.ChatService;
 import com.gitalk.domain.chat.service.NoticeService;
 import com.gitalk.domain.chat.session.ChatRoomSession;
 import com.gitalk.domain.chat.view.ChatRoomView;
+import com.gitalk.domain.chat.view.SearchView;
 import com.gitalk.domain.chatbot.service.NewsService;
 import com.gitalk.domain.chatbot.service.TrendingService;
 import com.gitalk.domain.chatbot.service.WebhookService;
-import com.gitalk.domain.chatbot.view.ChatBotView;
 import com.gitalk.domain.oauth.github.service.GithubAuthService;
 import com.gitalk.domain.oauth.github.service.GithubOauthClient;
-import com.gitalk.domain.user.model.Users;
 import com.gitalk.domain.user.model.Users;
 import com.gitalk.domain.user.repository.UserRepository;
 import com.gitalk.domain.user.service.UserService;
@@ -39,13 +40,35 @@ public class GitalkApplication {
     private static final MainView mainView = new MainView();
     private static final ChatRoomService chatRoomService = new ChatRoomService(
             new ChatRoomRepositoryImpl(), new ChatRoomMemberRepositoryImpl());
+
     private static final ChatRoomView chatRoomView = new ChatRoomView();
     private static final NoticeService noticeService = new NoticeService(new NoticeRepositoryImpl());
+
+    private static final MongoConnectionManager mongoConnectionManager = MongoConnectionManager.getInstance();
+
+    private static final MongoChatMessageRepository mongoChatMessageRepository =
+            new MongoChatMessageRepository(mongoConnectionManager);
+
+    private static final MongoSearchRepositoryImpl mongoSearchRepository =
+            new MongoSearchRepositoryImpl(mongoConnectionManager);
+
+    private static final ChatService chatService = new ChatService(mongoChatMessageRepository);
+
+    private static final ChatSearchService chatSearchService =
+            new ChatSearchService(mongoSearchRepository, chatService, chatRoomService);
+
+    private static final SearchSessionManager searchSessionManager = new SearchSessionManager();
+    private static final SearchView searchView = new SearchView();
+
+
     private static final ChatRoomSession chatRoomSession = new ChatRoomSession(
             trendingService, newsService, webhookService,
             new ChatRoomService(new ChatRoomRepositoryImpl(), new ChatRoomMemberRepositoryImpl()),
             new UserService(new UserRepository()),
-            noticeService);
+            noticeService,
+            chatSearchService, searchSessionManager, searchView
+            );
+
     private static UserService userService;
     private static BufferedReader reader;
 
@@ -80,6 +103,10 @@ public class GitalkApplication {
             if (choice == null) {
                 mainView.printExit();
                 return;
+            }
+
+            if (handleGlobalSlashCommand(user, choice)) {
+                continue;
             }
 
             switch (choice.trim()) {
@@ -127,6 +154,10 @@ public class GitalkApplication {
             String input = readLine();
             if (input == null || input.equals("0")) return;
 
+            if (handleGlobalSlashCommand(user, input)) {
+                continue;
+            }
+
             if ("c".equalsIgnoreCase(input)) {
                 ChatRoom room = createRoom(user);
                 if (room != null) enterRoom(user, room);
@@ -151,6 +182,10 @@ public class GitalkApplication {
             chatRoomView.printRoomActionMenu(room, isCreator, latestNotice);
             String input = readLine();
 
+            if (handleGlobalSlashCommand(user, input)) {
+                continue;
+            }
+
             switch (input == null ? "0" : input.trim()) {
                 case "1" -> { enterRoom(user, room); return; }
                 case "2" -> inviteToRoom(user, room);
@@ -174,6 +209,10 @@ public class GitalkApplication {
             String input = readLine();
             if (input == null || input.equals("0")) return;
 
+            if (handleGlobalSlashCommand(user, input)) {
+                continue;
+            }
+
             try {
                 int choice = Integer.parseInt(input);
                 if (choice < 1 || choice > notices.size()) continue;
@@ -187,8 +226,21 @@ public class GitalkApplication {
 
     private static void enterRoom(Users user, ChatRoom room) {
         chatRoomView.printEntering(room);
-        String nickname = user.getNickname() != null ? user.getNickname() : user.getEmail();
+        String nickname = resolveNickname(user);
         chatRoomSession.enter(user.getUserId(), nickname, room.getRoomId(), room.getName());
+    }
+
+    private static boolean handleGlobalSlashCommand(Users user, String input) {
+        if (input == null || !input.startsWith("/")) {
+            return false;
+        }
+
+        chatRoomSession.handleOutsideRoomCommand(user.getUserId(), resolveNickname(user), input);
+        return true;
+    }
+
+    private static String resolveNickname(Users user) {
+        return user.getNickname() != null ? user.getNickname() : user.getEmail();
     }
 
     private static void inviteToRoom(Users inviter, ChatRoom room) {

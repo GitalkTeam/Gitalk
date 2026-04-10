@@ -7,8 +7,8 @@ import com.gitalk.domain.user.repository.UserRepository;
 import java.util.Optional;
 
 /**
- * GithubAuthService Description :
- * NOTE :
+ * GithubAuthService Description : GitHub 로그인, 계정 연동, 회원 등록 흐름을 조율하는 인증 서비스입니다.
+ * NOTE : service 계층 클래스이며, GithubOauthClient와 UserRepository를 연결해 GitHub 인증 절차를 처리합니다.
  *
  * @author jki
  * @since 04-08 (수) 오후 4:57
