@@ -1,5 +1,6 @@
 package com.gitalk;
 
+import com.gitalk.common.api.GithubWebhookServer;
 import com.gitalk.common.api.OpenAIClient;
 import com.gitalk.common.util.Layout;
 import com.gitalk.common.view.MainView;
@@ -13,12 +14,12 @@ import com.gitalk.domain.chat.service.ChatRoomService;
 import com.gitalk.domain.chat.service.ChatService;
 import com.gitalk.domain.chat.service.MissedMessageService;
 import com.gitalk.domain.chat.service.NoticeService;
+import com.gitalk.domain.chat.service.RepoService;
 import com.gitalk.domain.chat.session.ChatRoomSession;
 import com.gitalk.domain.chat.view.ChatRoomView;
 import com.gitalk.domain.chat.view.SearchView;
 import com.gitalk.domain.chatbot.service.NewsService;
 import com.gitalk.domain.chatbot.service.TrendingService;
-import com.gitalk.domain.chatbot.service.WebhookService;
 import com.gitalk.domain.oauth.github.service.GithubAuthService;
 import com.gitalk.domain.oauth.github.service.GithubOauthClient;
 import com.gitalk.domain.user.model.Users;
@@ -38,10 +39,11 @@ public class GitalkApplication {
     private static final int POST_LOGIN_WIDTH = 68;
     private static final TrendingService trendingService = new TrendingService();
     private static final NewsService newsService = new NewsService();
-    private static final WebhookService webhookService = new WebhookService();
     private static final MainView mainView = new MainView();
+    private static final ChatRoomRepository sharedChatRoomRepository = new ChatRoomRepositoryImpl();
+    private static final ChatRoomMemberRepository sharedMemberRepository = new ChatRoomMemberRepositoryImpl();
     private static final ChatRoomService chatRoomService = new ChatRoomService(
-            new ChatRoomRepositoryImpl(), new ChatRoomMemberRepositoryImpl());
+            sharedChatRoomRepository, sharedMemberRepository);
 
     private static final ChatRoomView chatRoomView = new ChatRoomView();
     private static final NoticeService noticeService = new NoticeService(new NoticeRepositoryImpl());
@@ -62,13 +64,20 @@ public class GitalkApplication {
     private static final SearchSessionManager searchSessionManager = new SearchSessionManager();
     private static final SearchView searchView = new SearchView();
 
-    private static final ChatRoomMemberRepository sharedMemberRepository = new ChatRoomMemberRepositoryImpl();
     private static final MissedMessageService missedMessageService = new MissedMessageService(
             mongoChatMessageRepository, sharedMemberRepository, new OpenAIClient());
 
+    // Repo / Webhook
+    private static final RepoService repoService = new RepoService();
+    // GithubWebhookServer 는 클라이언트(이 process)에선 broadcast 안 함 — null 주입 OK,
+    // 단지 /repo events 가 호출하는 getRecentEvents 만 위해 client 측 인스턴스 둠.
+    // 실제 webhook 수신·broadcast 는 ChatServer 측 인스턴스가 담당.
+    private static final GithubWebhookServer webhookServer =
+            new GithubWebhookServer(sharedChatRoomRepository, chatService);
+
     private static final ChatRoomSession chatRoomSession = new ChatRoomSession(
-            trendingService, newsService, webhookService,
-            new ChatRoomService(new ChatRoomRepositoryImpl(), sharedMemberRepository),
+            trendingService, newsService, repoService, webhookServer,
+            chatRoomService,
             new UserService(new UserRepository()),
             noticeService,
             chatSearchService, searchSessionManager, searchView,
@@ -339,7 +348,8 @@ public class GitalkApplication {
     private static void enterRoom(Users user, ChatRoom room) {
         chatRoomView.printEntering(room);
         String nickname = resolveNickname(user);
-        chatRoomSession.enter(user.getUserId(), nickname, room.getRoomId(), room.getName());
+        chatRoomSession.enter(user.getUserId(), nickname,
+                user.getAuthAccessToken(), room.getRoomId(), room.getName());
     }
 
     private static boolean handleGlobalSlashCommand(Users user, String input) {
@@ -402,17 +412,87 @@ public class GitalkApplication {
         String name = readLine();
         if (name == null || name.isBlank()) return null;
 
+        // 1. 방 먼저 생성 (repo 없이) — repo 연결은 ID 필요해서 생성 후
+        ChatRoom room;
         try {
-            ChatRoom room = chatRoomService.createRoom(name.trim(), "TEAM", null, null, user.getUserId());
-            chatRoomView.printCreateSuccess(room);
-            chatRoomView.pressEnter();
-            readLine();
-            return room;
+            room = chatRoomService.createRoom(name.trim(), "TEAM", null, null, user.getUserId());
         } catch (IllegalArgumentException e) {
             chatRoomView.printCreateFail(e.getMessage());
             chatRoomView.pressEnter();
             readLine();
             return null;
+        }
+
+        // 2. GitHub 연동 사용자에게 repo 연결 권유
+        String token = user.getAuthAccessToken();
+        if (token != null && !token.isBlank()) {
+            offerRepoConnection(room, token);
+        } else {
+            System.out.println();
+            System.out.println(" ℹ GitHub 미연동 — repo 없이 생성됨 (나중에 /repo connect 로 추가 가능)");
+        }
+
+        chatRoomView.printCreateSuccess(room);
+        chatRoomView.pressEnter();
+        readLine();
+        return room;
+    }
+
+    /**
+     * 새로 만든 TEAM 방에 GitHub repo 연결 권유. 사용자가 거부하거나 실패해도
+     * 방 자체는 이미 생성된 상태이므로 흐름은 계속 진행.
+     */
+    private static void offerRepoConnection(ChatRoom room, String token) {
+        System.out.println();
+        System.out.print(" GitHub repo 와 연결하시겠어요? (y/n) > ");
+        System.out.flush();
+        String answer = readLine();
+        if (!"y".equalsIgnoreCase(answer)) return;
+
+        System.out.println(" GitHub 에서 레포 목록을 가져오는 중...");
+        List<RepoService.RepoInfo> repos;
+        try {
+            repos = repoService.listMyRepos(token, 100);
+        } catch (Exception e) {
+            System.out.println(" ✗ 레포 목록 조회 실패: " + e.getMessage());
+            return;
+        }
+        if (repos.isEmpty()) {
+            System.out.println(" 접근 가능한 레포가 없습니다.");
+            return;
+        }
+
+        chatRoomView.printRepoList(repos);
+        String input = readLine();
+        if (input == null || input.isBlank() || "0".equals(input) || "s".equalsIgnoreCase(input)) {
+            System.out.println(" 건너뛰기 — repo 없이 생성됨 (나중에 /repo connect 로 추가 가능)");
+            return;
+        }
+
+        int choice;
+        try {
+            choice = Integer.parseInt(input.trim());
+        } catch (NumberFormatException e) {
+            System.out.println(" 잘못된 입력 — 건너뛰기");
+            return;
+        }
+        if (choice < 1 || choice > repos.size()) {
+            System.out.println(" 범위 밖 — 건너뛰기");
+            return;
+        }
+        RepoService.RepoInfo picked = repos.get(choice - 1);
+
+        try {
+            String payloadUrl = RepoService.resolveWebhookBaseUrl() + "/" + room.getRoomId();
+            RepoService.WebhookRegistration reg = repoService.registerWebhook(picked, token, payloadUrl);
+            chatRoomService.linkRepo(room.getRoomId(), picked.htmlUrl(), reg.secret(), reg.hookId());
+            System.out.println(" ✓ " + picked.fullName() + " 연결됨");
+            System.out.println(" ✓ Webhook 자동 등록 완료 (id=" + reg.hookId() + ")");
+            System.out.println(" ✓ Payload URL: " + payloadUrl);
+        } catch (Exception e) {
+            System.out.println(" ✗ Webhook 등록 실패: " + e.getMessage());
+            System.out.println("   (admin:repo_hook scope + repo admin 권한이 필요합니다)");
+            System.out.println("   방은 생성됐고 repo 없이 사용 가능. 나중에 /repo connect 로 재시도하세요.");
         }
     }
 

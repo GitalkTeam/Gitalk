@@ -3,6 +3,7 @@ package com.gitalk.domain.chat.view;
 import com.gitalk.common.util.Layout;
 import com.gitalk.domain.chat.domain.ChatRoom;
 import com.gitalk.domain.chat.domain.Notice;
+import com.gitalk.domain.chat.service.RepoService;
 
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -172,6 +173,30 @@ public class ChatRoomView {
 
     public void printOpenRoomNoResult(String keyword) {
         System.out.println(" '" + keyword + "' 에 해당하는 오픈 채팅이 없습니다.");
+    }
+
+    // ── GitHub repo 선택 (TEAM 방 생성 시) ──────────────────────────────────
+
+    private static final int W_REPO_NAME = 32;
+
+    public void printRepoList(List<RepoService.RepoInfo> repos) {
+        System.out.println();
+        System.out.println(DIV);
+        System.out.println(centerLine("GitHub 레포 선택"));
+        System.out.println(DIV);
+        for (int i = 0; i < repos.size(); i++) {
+            RepoService.RepoInfo r = repos.get(i);
+            String idx  = Layout.padLeft((i + 1) + ".", 3);
+            String name = Layout.fit(r.fullName(), W_REPO_NAME);
+            String lang = r.language() != null ? r.language() : "-";
+            String priv = r.isPrivate() ? " (private)" : "";
+            System.out.println(" " + idx + " " + name + "  ★ " + r.stars() + "  " + lang + priv);
+        }
+        System.out.println(DIV);
+        System.out.println(centerLine("S. 건너뛰기 (repo 없이 생성)    0. 취소"));
+        System.out.println(DIV);
+        System.out.print(" 선택 > ");
+        System.out.flush();
     }
 
     // ── 방 액션 메뉴 (최신 공지 포함) ───────────────────────────────────────

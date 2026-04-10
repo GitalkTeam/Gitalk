@@ -11,7 +11,8 @@ import java.util.Optional;
 public class ChatRoomRepositoryImpl implements ChatRoomRepository {
 
     private static final String SELECT_BASE = """
-            SELECT r.roomid, r.name, r.type, r.team_url, r.description, r.creator_id, r.created_at,
+            SELECT r.roomid, r.name, r.type, r.team_url, r.webhook_secret, r.webhook_id,
+                   r.description, r.creator_id, r.created_at,
                    u.nickname AS creator_nickname
             FROM chat_rooms r
             LEFT JOIN users u ON r.creator_id = u.userid
@@ -167,15 +168,35 @@ public class ChatRoomRepositoryImpl implements ChatRoomRepository {
         Timestamp ts = rs.getTimestamp("created_at");
         long creatorIdRaw = rs.getLong("creator_id");
         Long creatorId = rs.wasNull() ? null : creatorIdRaw;
+        long webhookIdRaw = rs.getLong("webhook_id");
+        Long webhookId = rs.wasNull() ? null : webhookIdRaw;
         return new ChatRoom(
                 rs.getLong("roomid"),
                 rs.getString("name"),
                 rs.getString("type"),
                 rs.getString("team_url"),
+                rs.getString("webhook_secret"),
+                webhookId,
                 rs.getString("description"),
                 creatorId,
                 rs.getString("creator_nickname"),
                 ts != null ? ts.toLocalDateTime() : null
         );
+    }
+
+    /** repo 연결: team_url + webhook_secret + webhook_id 한 번에 갱신 */
+    public void updateRepoLink(Long roomId, String teamUrl, String webhookSecret, Long webhookId) {
+        String sql = "UPDATE chat_rooms SET team_url = ?, webhook_secret = ?, webhook_id = ? WHERE roomid = ?";
+        try (Connection conn = DBConnection.makeConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, teamUrl);
+            pstmt.setString(2, webhookSecret);
+            if (webhookId != null) pstmt.setLong(3, webhookId);
+            else pstmt.setNull(3, java.sql.Types.BIGINT);
+            pstmt.setLong(4, roomId);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new RuntimeException("repo 연결 갱신 실패", e);
+        }
     }
 }

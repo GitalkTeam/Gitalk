@@ -1,6 +1,7 @@
 package com.gitalk.domain.chat.session;
 
 import com.gitalk.common.api.ImageAsciiHttpServer;
+import com.gitalk.common.util.AppConfig;
 import com.gitalk.common.util.Layout;
 import com.gitalk.common.util.Screen;
 import com.gitalk.common.util.Spinner;
@@ -22,9 +23,10 @@ import com.gitalk.domain.chat.view.SearchView;
 import com.gitalk.domain.chatbot.model.NewsItem;
 import com.gitalk.domain.chatbot.model.TrendingRepo;
 import com.gitalk.domain.chatbot.model.WebhookEvent;
+import com.gitalk.common.api.GithubWebhookServer;
 import com.gitalk.domain.chatbot.service.NewsService;
 import com.gitalk.domain.chatbot.service.TrendingService;
-import com.gitalk.domain.chatbot.service.WebhookService;
+import com.gitalk.domain.chat.service.RepoService;
 import com.gitalk.domain.user.service.UserService;
 
 import org.jline.reader.EndOfFileException;
@@ -71,8 +73,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class ChatRoomSession {
 
-    private static final String HOST = "127.0.0.1";
+    /** 채팅 서버 host. config 의 chat.server.host (기본 127.0.0.1) */
+    private static final String HOST = resolveHost();
     private static final int    PORT = 6000;
+
+    private static String resolveHost() {
+        String host = AppConfig.get("chat.server.host");
+        return (host == null || host.isBlank()) ? "127.0.0.1" : host.trim();
+    }
 
     // ANSI 색상
     private static final String RESET  = "\033[0m";
@@ -87,7 +95,8 @@ public class ChatRoomSession {
 
     private final TrendingService  trendingService;
     private final NewsService      newsService;
-    private final WebhookService   webhookService;
+    private final RepoService      repoService;
+    private final GithubWebhookServer webhookServer;  // /repo events 조회용
     private final ChatRoomService  chatRoomService;
     private final UserService      userService;
     private final NoticeService    noticeService;
@@ -105,6 +114,7 @@ public class ChatRoomSession {
     private String currentNickname;
     private String currentRoomName;
     private String currentRoomType;   // "TEAM" 또는 "OPEN" — 명령 권한 분기용
+    private String currentAccessToken;  // GitHub access_token (있을 때만, repo API 호출용)
 
     // 이미지(ASCII 아트) 수신 저장소 — 세션 동안 유지
     private final Map<String, String> asciiArtStore = new ConcurrentHashMap<>();
@@ -135,7 +145,8 @@ public class ChatRoomSession {
 
     public ChatRoomSession(TrendingService trendingService,
                            NewsService newsService,
-                           WebhookService webhookService,
+                           RepoService repoService,
+                           GithubWebhookServer webhookServer,
                            ChatRoomService chatRoomService,
                            UserService userService,
                            NoticeService noticeService,
@@ -145,7 +156,8 @@ public class ChatRoomSession {
                            MissedMessageService missedMessageService) {
         this.trendingService = trendingService;
         this.newsService     = newsService;
-        this.webhookService  = webhookService;
+        this.repoService     = repoService;
+        this.webhookServer   = webhookServer;
         this.chatRoomService = chatRoomService;
         this.userService     = userService;
         this.noticeService   = noticeService;
@@ -157,10 +169,11 @@ public class ChatRoomSession {
 
     // ── 진입점 ───────────────────────────────────────────────────────────────
 
-    public void enter(Long userId, String nickname, Long roomId, String roomName) {
+    public void enter(Long userId, String nickname, String accessToken, Long roomId, String roomName) {
         currentUserId = userId;
         currentRoomId = roomId;
         currentNickname = nickname;
+        currentAccessToken = accessToken;
         currentRoomName = roomName;
         currentRoomType = chatRoomService.getRoom(roomId)
                 .map(r -> r.getType())
@@ -280,6 +293,7 @@ public class ChatRoomSession {
             currentNickname = null;
             currentRoomName = null;
             currentRoomType = null;
+            currentAccessToken = null;
             Spinner.setSuppressed(false);
         }
     }
@@ -455,7 +469,7 @@ public class ChatRoomSession {
         switch (main) {
             case "trend"   -> cmdTrend(arg);
             case "news"    -> cmdNews();
-            case "webhook" -> cmdWebhook(arg);
+            case "repo"    -> cmdRepo(arg);
             case "invite"  -> cmdInvite(arg);
             case "notice"  -> cmdNotice(arg);
             case "image"   -> cmdImage(arg);
@@ -980,41 +994,212 @@ public class ChatRoomSession {
         }
     }
 
-    private void cmdWebhook(String sub) {
-        if (blockIfOpenRoom("웹훅")) return;
-        switch (sub.toLowerCase()) {
-            case "start" -> {
-                if (webhookService.isRunning()) {
-                    printToScroll(YELLOW + " 웹훅 서버가 이미 실행 중입니다." + RESET);
+    // ── /repo (팀 채팅 ↔ GitHub repo 연결) ───────────────────────────────
+
+    private void cmdRepo(String sub) {
+        if (blockIfOpenRoom("repo 연결")) return;
+        String trimmed = sub == null ? "" : sub.trim().toLowerCase();
+        if (trimmed.isEmpty()) {
+            showRepoInfo();
+            return;
+        }
+        switch (trimmed) {
+            case "connect"    -> connectRepo();
+            case "disconnect" -> disconnectRepo();
+            case "events"     -> showRepoEvents();
+            default -> printToScroll(DIM + " 사용법: /repo | /repo connect | /repo disconnect | /repo events" + RESET);
+        }
+    }
+
+    private void showRepoInfo() {
+        chatRoomService.getRoom(currentRoomId).ifPresentOrElse(room -> {
+            if (!room.hasRepo()) {
+                printToScroll(DIM + " 연결된 GitHub repo 가 없습니다. /repo connect 로 연결하세요." + RESET);
+                return;
+            }
+            try {
+                String token = currentUserAccessToken();
+                if (token == null) {
+                    printToScroll(DIM + " " + room.getTeamUrl() + RESET);
                     return;
                 }
-                try {
-                    webhookService.start(event -> {
-                        for (String line : event.toString().split("\n"))
-                            printToScroll(YELLOW + " [웹훅] " + line + RESET);
-                    });
-                    printToScroll(GREEN + " 웹훅 서버 시작됨" + RESET);
-                } catch (Exception e) {
-                    printToScroll(" 웹훅 시작 실패: " + e.getMessage());
+                RepoService.RepoInfo info = repoService.fetchRepoByUrl(room.getTeamUrl(), token);
+                printToScroll(BOLD + " [GitHub] 연결된 repo: " + info.fullName() + RESET);
+                if (info.description() != null) {
+                    printToScroll("    " + info.description());
                 }
+                printToScroll("    " + (info.language() != null ? info.language() + "  " : "")
+                        + "★ " + info.stars() + "  default: " + info.defaultBranch()
+                        + (info.isPrivate() ? "  (private)" : ""));
+                printToScroll(DIM + "    " + info.htmlUrl() + RESET);
+            } catch (Exception e) {
+                printToScroll(DIM + " 연결: " + room.getTeamUrl() + RESET);
+                printToScroll(DIM + " (GitHub 정보 조회 실패: " + e.getMessage() + ")" + RESET);
             }
-            case "stop" -> {
-                webhookService.stop();
-                printToScroll(DIM + " 웹훅 서버 중지됨" + RESET);
-            }
-            case "list" -> {
-                List<WebhookEvent> events = webhookService.getEvents();
-                if (events.isEmpty()) {
-                    printToScroll(DIM + " 수신된 웹훅 이벤트 없음" + RESET);
-                } else {
-                    printToScroll(BOLD + " ─── 웹훅 이벤트 ───" + RESET);
-                    for (WebhookEvent e : events)
-                        for (String line : e.toString().split("\n"))
-                            printToScroll(" " + line);
-                }
-            }
-            default -> printToScroll(" 사용법: /webhook start | stop | list");
+        }, () -> printToScroll(DIM + " 방 정보 조회 실패" + RESET));
+    }
+
+    private void connectRepo() {
+        // 1. 권한: 방장만
+        if (!chatRoomService.isCreator(currentRoomId, currentUserId)) {
+            printToScroll(DIM + " 방장만 repo 를 연결할 수 있습니다." + RESET);
+            return;
         }
+
+        // 2. GitHub 토큰 확인
+        String token = currentUserAccessToken();
+        if (token == null) {
+            printToScroll(DIM + " GitHub 연동이 필요합니다. 메인 메뉴에서 GitHub 로그인을 먼저 해주세요." + RESET);
+            return;
+        }
+
+        // 3. repo 목록 조회 + 선택 (alt screen 뷰어로 진행)
+        java.util.List<RepoService.RepoInfo> repos;
+        try {
+            printToScroll(DIM + " GitHub 에서 레포 목록을 가져오는 중..." + RESET);
+            repos = repoService.listMyRepos(token, 100);
+        } catch (Exception e) {
+            printToScroll(DIM + " 레포 목록 조회 실패: " + e.getMessage() + RESET);
+            return;
+        }
+        if (repos.isEmpty()) {
+            printToScroll(DIM + " 접근 가능한 레포가 없습니다." + RESET);
+            return;
+        }
+
+        RepoService.RepoInfo picked = pickRepoFromList(repos);
+        if (picked == null) {
+            printToScroll(DIM + " 연결 취소됨." + RESET);
+            return;
+        }
+
+        // 4. Webhook 자동 등록 + DB 갱신
+        try {
+            String payloadUrl = RepoService.resolveWebhookBaseUrl() + "/" + currentRoomId;
+            RepoService.WebhookRegistration reg = repoService.registerWebhook(picked, token, payloadUrl);
+            chatRoomService.linkRepo(currentRoomId, picked.htmlUrl(), reg.secret(), reg.hookId());
+            printToScroll(GREEN + " ✓ " + picked.fullName() + " 연결됨" + RESET);
+            printToScroll(DIM + "    Webhook 자동 등록 완료 (id=" + reg.hookId() + ")" + RESET);
+            printToScroll(DIM + "    Payload URL: " + payloadUrl + RESET);
+        } catch (Exception e) {
+            printToScroll(DIM + " Webhook 등록 실패: " + e.getMessage() + RESET);
+            printToScroll(DIM + " (admin:repo_hook scope + repo admin 권한이 필요합니다)" + RESET);
+        }
+    }
+
+    private RepoService.RepoInfo pickRepoFromList(java.util.List<RepoService.RepoInfo> repos) {
+        if (terminal == null || lineReader == null) return null;
+        viewerActive = true;
+        try {
+            terminal.puts(org.jline.utils.InfoCmp.Capability.enter_ca_mode);
+            terminal.puts(org.jline.utils.InfoCmp.Capability.clear_screen);
+            terminal.flush();
+
+            PrintWriter w = terminal.writer();
+            int width = bannerWidth();
+            String div = "─".repeat(width);
+            w.println();
+            w.println(BOLD + Layout.center("GitHub 레포 선택", width) + RESET);
+            w.println(div);
+            w.println();
+            for (int i = 0; i < repos.size(); i++) {
+                RepoService.RepoInfo r = repos.get(i);
+                String idx = Layout.padLeft((i + 1) + ".", 3);
+                String lang = r.language() != null ? r.language() : "-";
+                String priv = r.isPrivate() ? " (private)" : "";
+                w.println(" " + idx + " " + Layout.fit(r.fullName(), 32)
+                        + "  ★ " + r.stars() + "  " + lang + priv);
+            }
+            w.println();
+            w.println(div);
+            w.println(DIM + "  번호 선택  ·  0/q: 취소" + RESET);
+            w.flush();
+
+            try {
+                while (true) {
+                    String input = lineReader.readLine(DIM + "  선택 > " + RESET);
+                    if (input == null) return null;
+                    String t = sanitize(input);
+                    if (t.isEmpty() || "0".equals(t) || "q".equalsIgnoreCase(t)) return null;
+                    try {
+                        int n = Integer.parseInt(t);
+                        if (n >= 1 && n <= repos.size()) return repos.get(n - 1);
+                    } catch (NumberFormatException ignored) {}
+                }
+            } catch (UserInterruptException | EndOfFileException e) {
+                return null;
+            }
+        } finally {
+            terminal.puts(org.jline.utils.InfoCmp.Capability.exit_ca_mode);
+            terminal.flush();
+            synchronized (this) {
+                if (lineReader != null) {
+                    for (String msg : viewerBuffer) lineReader.printAbove(msg);
+                }
+                viewerBuffer.clear();
+                viewerActive = false;
+            }
+        }
+    }
+
+    private void disconnectRepo() {
+        if (!chatRoomService.isCreator(currentRoomId, currentUserId)) {
+            printToScroll(DIM + " 방장만 repo 연결을 해제할 수 있습니다." + RESET);
+            return;
+        }
+        chatRoomService.getRoom(currentRoomId).ifPresentOrElse(room -> {
+            if (!room.hasRepo()) {
+                printToScroll(DIM + " 연결된 repo 가 없습니다." + RESET);
+                return;
+            }
+            String token = currentUserAccessToken();
+            // 1) GitHub 측 webhook 제거 (실패해도 DB 정리는 진행)
+            if (token != null && room.getWebhookId() != null) {
+                try {
+                    String fullName = RepoService.parseRepoFullName(room.getTeamUrl());
+                    if (fullName == null) {
+                        printToScroll(DIM + " repo URL 파싱 실패: " + room.getTeamUrl() + RESET);
+                    } else {
+                        repoService.deleteWebhook(fullName, room.getWebhookId(), token);
+                    }
+                } catch (Exception e) {
+                    printToScroll(DIM + " GitHub webhook 삭제 실패: " + e.getMessage() + " (DB 는 정리합니다)" + RESET);
+                }
+            }
+            // 2) DB unlink
+            chatRoomService.unlinkRepo(currentRoomId);
+            printToScroll(GREEN + " ✓ repo 연결 해제됨" + RESET);
+        }, () -> printToScroll(DIM + " 방 정보 조회 실패" + RESET));
+    }
+
+    private void showRepoEvents() {
+        if (webhookServer == null) {
+            printToScroll(DIM + " webhook 서버가 비활성화되어 있습니다." + RESET);
+            return;
+        }
+        java.util.List<com.gitalk.domain.chatbot.model.WebhookEvent> events =
+                webhookServer.getRecentEvents(currentRoomId, 30);
+        if (events.isEmpty()) {
+            printToScroll(DIM + " 이 방에 수신된 GitHub 이벤트가 없습니다." + RESET);
+            return;
+        }
+        showInAltScreen("최근 GitHub 이벤트 (" + events.size() + "건)", w -> {
+            java.time.format.DateTimeFormatter fmt =
+                    java.time.format.DateTimeFormatter.ofPattern("MM/dd HH:mm");
+            for (com.gitalk.domain.chatbot.model.WebhookEvent e : events) {
+                String time = e.receivedAt() != null ? e.receivedAt().format(fmt) : "?";
+                w.println(" " + DIM + time + RESET + "  [" + e.type() + "/" + e.action() + "]  "
+                        + e.title() + "  by " + e.author());
+                if (e.url() != null && !e.url().isBlank()) {
+                    w.println("        " + DIM + e.url() + RESET);
+                }
+            }
+        });
+    }
+
+    /** 현재 세션 사용자의 GitHub access_token. 로컬 가입자는 null. */
+    private String currentUserAccessToken() {
+        return currentAccessToken;
     }
 
     private void cmdInvite(String email) {
@@ -1180,10 +1365,11 @@ public class ChatRoomSession {
                     {"/notice", "공지 목록 보기"},
                     {"/notice <제목>", "공지 등록"},
             }),
-            new HelpCategory("🔔", "웹훅", true, new String[][]{
-                    {"/webhook start", "웹훅 서버 시작"},
-                    {"/webhook stop", "웹훅 서버 중지"},
-                    {"/webhook list", "수신된 웹훅 이벤트 목록"},
+            new HelpCategory("🔗", "GitHub", true, new String[][]{
+                    {"/repo", "현재 연결된 GitHub repo 정보 보기"},
+                    {"/repo connect", "방장만. GitHub repo 선택해서 연결 + 자동 webhook 등록"},
+                    {"/repo disconnect", "방장만. repo 연결 해제 + webhook 제거"},
+                    {"/repo events", "이 방에 도착한 최근 GitHub 이벤트 보기"},
             })
     );
 
