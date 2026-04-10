@@ -7,7 +7,6 @@ import com.gitalk.domain.chat.search.domain.SearchExecutionContext;
 import com.gitalk.domain.chat.search.domain.SearchSession;
 import com.gitalk.domain.chat.search.util.SearchCommandParser;
 import com.gitalk.domain.chat.search.util.SearchShareCodec;
-import com.gitalk.domain.chat.search.util.SearchWindowLauncher;
 import com.gitalk.domain.chat.search.service.ChatSearchService;
 import com.gitalk.domain.chat.search.domain.SearchCommand;
 import com.gitalk.domain.chat.search.service.SearchSessionManager;
@@ -92,8 +91,6 @@ public class ChatRoomSession {
     private final ChatSearchService chatSearchService;
     private final SearchSessionManager searchSessionManager;
     private final SearchView searchView;
-    private final SearchWindowLauncher searchWindowLauncher = new SearchWindowLauncher();
-
     // 세션 컨텍스트 (enter() 동안만 유효)
     private LineReader lineReader;
     private Terminal   terminal;
@@ -252,7 +249,43 @@ public class ChatRoomSession {
             return;
         }
 
-        executeSearchCommand(arg, nickname, userId, null, false);
+        runOutsideRoomCommandWithViewer(() ->
+                executeSearchCommand(arg, nickname, userId, null, false));
+    }
+
+    private void runOutsideRoomCommandWithViewer(Runnable action) {
+        if (terminal != null && lineReader != null) {
+            action.run();
+            return;
+        }
+
+        Terminal previousTerminal = terminal;
+        LineReader previousLineReader = lineReader;
+
+        try (Terminal tempTerminal = TerminalBuilder.builder()
+                .system(true)
+                .name("gitalk-search")
+                .encoding(StandardCharsets.UTF_8)
+                .build()) {
+
+            LineReader tempReader = LineReaderBuilder.builder()
+                    .terminal(tempTerminal)
+                    .option(LineReader.Option.DISABLE_EVENT_EXPANSION, true)
+                    .option(LineReader.Option.HISTORY_BEEP, false)
+                    .option(LineReader.Option.ERASE_LINE_ON_FINISH, true)
+                    .option(LineReader.Option.AUTO_FRESH_LINE, true)
+                    .build();
+
+            terminal = tempTerminal;
+            lineReader = tempReader;
+            action.run();
+        } catch (IOException e) {
+            System.out.println(" 검색 화면을 여는 중 오류가 발생했습니다: " + e.getMessage());
+            action.run();
+        } finally {
+            lineReader = previousLineReader;
+            terminal = previousTerminal;
+        }
     }
 
     // ── 출력 (JLine printAbove 위임) ────────────────────────────────────────
@@ -474,6 +507,63 @@ public class ChatRoomSession {
         }
     }
 
+    private void showSearchResult(String title, String content) {
+        String safeTitle = (title == null || title.isBlank()) ? "결과" : title.trim();
+        String body = content == null ? "" : content;
+
+        if (terminal == null || lineReader == null) {
+            printToScroll(BOLD + " ===== " + safeTitle + " =====" + RESET);
+            for (String line : body.split("\n", -1)) {
+                printToScroll(line);
+            }
+            printToScroll(BOLD + " =========================" + RESET);
+            return;
+        }
+
+        viewerActive = true;
+        try {
+            terminal.puts(Capability.enter_ca_mode);
+            terminal.puts(Capability.clear_screen);
+            terminal.flush();
+
+            PrintWriter w = terminal.writer();
+            int width = Math.min(80, Math.max(20, terminal.getWidth()));
+            String div = "=".repeat(width);
+            w.println();
+            w.println(BOLD + " " + safeTitle + RESET);
+            w.println(div);
+            w.print(body);
+            if (!body.endsWith("\n")) {
+                w.println();
+            }
+            w.println(div);
+            w.flush();
+
+            try {
+                while (true) {
+                    String line = lineReader.readLine(DIM + " q+Enter (또는 Enter) 로 채팅방으로 돌아가기 > " + RESET);
+                    if (line == null) break;
+                    String t = sanitize(line);
+                    if (t.isEmpty() || "q".equalsIgnoreCase(t)) break;
+                }
+            } catch (UserInterruptException | EndOfFileException ignored) {
+            }
+        } finally {
+            terminal.puts(Capability.exit_ca_mode);
+            terminal.flush();
+
+            synchronized (this) {
+                if (lineReader != null) {
+                    for (String msg : viewerBuffer) {
+                        lineReader.printAbove(msg);
+                    }
+                }
+                viewerBuffer.clear();
+                viewerActive = false;
+            }
+        }
+    }
+
     private static String detectContentType(File file) {
         String name = file.getName().toLowerCase();
         if (name.endsWith(".png"))  return "image/png";
@@ -655,7 +745,7 @@ public class ChatRoomSession {
             SearchCommand command = SearchCommandParser.parse(arg);
 
             if (command.isHelp()) {
-                searchWindowLauncher.open("Search Help", searchView.helpText());
+                showSearchResult("Search Help", searchView.helpText());
                 return;
             }
 
@@ -692,8 +782,8 @@ public class ChatRoomSession {
                 }
 
                 String rendered = searchView.render(sharedSession);
-                searchWindowLauncher.open("Shared Search - " + command.getShareId(), rendered);
-                printToScroll(GREEN + " 공유 검색 결과 창을 열었습니다." + RESET);
+                showSearchResult("Shared Search - " + command.getShareId(), rendered);
+                printToScroll(GREEN + " 공유 검색 결과를 화면에 표시했습니다." + RESET);
                 return;
             }
             SearchExecutionContext context = new SearchExecutionContext(
@@ -707,9 +797,9 @@ public class ChatRoomSession {
             searchSessionManager.save(session);
 
             String rendered = searchView.render(session);
-            searchWindowLauncher.open("Search Result - " + session.getKeyword(), rendered);
+            showSearchResult("Search Result - " + session.getKeyword(), rendered);
 
-            printToScroll(GREEN + " 검색 결과를 새 창으로 열었습니다." + RESET);
+            printToScroll(GREEN + " 검색 결과를 화면에 표시했습니다." + RESET);
 
         } catch (Exception e) {
             printToScroll(DIM + " 검색 처리 중 오류: " + e.getMessage() + RESET);

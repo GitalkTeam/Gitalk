@@ -209,6 +209,10 @@ public class GitalkApplication {
             String input = readLine();
             if (input == null || input.equals("0")) return;
 
+            if (handleGlobalSlashCommand(user, input)) {
+                continue;
+            }
+
             try {
                 int choice = Integer.parseInt(input);
                 if (choice < 1 || choice > notices.size()) continue;
