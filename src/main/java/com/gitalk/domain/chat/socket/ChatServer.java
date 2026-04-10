@@ -17,11 +17,16 @@ public class ChatServer {
     private final int port;
     private final ChatService chatService;
     private final SearchShareService searchShareService;
+    private final ChatRoomMemberRepository memberRepository;
 
-    public ChatServer(int port, ChatService chatService, SearchShareService searchShareService) {
+    public ChatServer(int port,
+                      ChatService chatService,
+                      SearchShareService searchShareService,
+                      ChatRoomMemberRepository memberRepository) {
         this.port = port;
         this.chatService = chatService;
         this.searchShareService = searchShareService;
+        this.memberRepository = memberRepository;
     }
 
     public void start() throws IOException {
@@ -37,7 +42,7 @@ public class ChatServer {
             while (true) {
                 Socket socket = serverSocket.accept();
                 System.out.println("[연결] 클라이언트: " + socket.getInetAddress().getHostAddress());
-                ClientHandler handler = new ClientHandler(socket, chatService, searchShareService);
+                ClientHandler handler = new ClientHandler(socket, chatService, searchShareService, memberRepository);
                 handler.start();
             }
         }
@@ -54,7 +59,8 @@ public class ChatServer {
         // implementation only for local fallback or storage migration work.
         ChatService chatService = new ChatService(messageRepository);
         SearchShareService searchShareService = new SearchShareService();
+        ChatRoomMemberRepository memberRepository = new ChatRoomMemberRepositoryImpl();
         Runtime.getRuntime().addShutdownHook(new Thread(connectionManager::close));
-        new ChatServer(PORT, chatService, searchShareService).start();
+        new ChatServer(PORT, chatService, searchShareService, memberRepository).start();
     }
 }

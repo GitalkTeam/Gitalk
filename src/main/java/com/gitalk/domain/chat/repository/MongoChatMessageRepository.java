@@ -21,6 +21,7 @@ import org.bson.Document;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
@@ -114,6 +115,45 @@ public class MongoChatMessageRepository implements MessageRepository {
             return result;
         } catch (Exception e) {
             throw new ChatRepositoryException("Mongo 메시지 조회 실패", e);
+        }
+    }
+
+    @Override
+    public List<Message> findByRoomIdSince(Long roomId, LocalDateTime since, int limit) {
+        if (roomId == null) {
+            throw new ChatRepositoryException("roomId는 필수입니다.");
+        }
+        if (since == null) {
+            return Collections.emptyList();
+        }
+        if (limit < 1) {
+            throw new ChatRepositoryException("limit는 1 이상이어야 합니다.");
+        }
+
+        try {
+            Date sinceDate = Date.from(since.atZone(ZoneId.systemDefault()).toInstant());
+            List<Message> result = new ArrayList<>();
+
+            // since 보다 나중에 생긴 메시지, 최신 limit 개를 가져온 뒤 시간 오름차순으로 뒤집어 반환.
+            // (오래된 limit 개가 아니라 최신 limit 개를 잘라야 사용자가 가장 최근 미독을 본다)
+            List<Message> recent = new ArrayList<>();
+            for (Document doc : collection.find(
+                    Filters.and(
+                            Filters.eq("roomId", roomId),
+                            Filters.gt("createdAt", sinceDate)
+                    ))
+                    .sort(Sorts.descending("createdAt"))
+                    .limit(limit)) {
+
+                recent.add(toMessage(doc));
+            }
+            // recent 는 desc, 화면에 chronological(asc) 로 보여야 하니 뒤집기
+            for (int i = recent.size() - 1; i >= 0; i--) {
+                result.add(recent.get(i));
+            }
+            return result;
+        } catch (Exception e) {
+            throw new ChatRepositoryException("Mongo 미독 메시지 조회 실패", e);
         }
     }
 

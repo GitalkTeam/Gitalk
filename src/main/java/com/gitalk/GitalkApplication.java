@@ -1,5 +1,6 @@
 package com.gitalk;
 
+import com.gitalk.common.api.OpenAIClient;
 import com.gitalk.common.util.Layout;
 import com.gitalk.common.view.MainView;
 import com.gitalk.domain.chat.config.MongoConnectionManager;
@@ -10,6 +11,7 @@ import com.gitalk.domain.chat.search.service.ChatSearchService;
 import com.gitalk.domain.chat.search.service.SearchSessionManager;
 import com.gitalk.domain.chat.service.ChatRoomService;
 import com.gitalk.domain.chat.service.ChatService;
+import com.gitalk.domain.chat.service.MissedMessageService;
 import com.gitalk.domain.chat.service.NoticeService;
 import com.gitalk.domain.chat.session.ChatRoomSession;
 import com.gitalk.domain.chat.view.ChatRoomView;
@@ -60,13 +62,17 @@ public class GitalkApplication {
     private static final SearchSessionManager searchSessionManager = new SearchSessionManager();
     private static final SearchView searchView = new SearchView();
 
+    private static final ChatRoomMemberRepository sharedMemberRepository = new ChatRoomMemberRepositoryImpl();
+    private static final MissedMessageService missedMessageService = new MissedMessageService(
+            mongoChatMessageRepository, sharedMemberRepository, new OpenAIClient());
 
     private static final ChatRoomSession chatRoomSession = new ChatRoomSession(
             trendingService, newsService, webhookService,
-            new ChatRoomService(new ChatRoomRepositoryImpl(), new ChatRoomMemberRepositoryImpl()),
+            new ChatRoomService(new ChatRoomRepositoryImpl(), sharedMemberRepository),
             new UserService(new UserRepository()),
             noticeService,
-            chatSearchService, searchSessionManager, searchView
+            chatSearchService, searchSessionManager, searchView,
+            missedMessageService
             );
 
     private static UserService userService;

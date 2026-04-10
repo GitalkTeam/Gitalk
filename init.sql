@@ -36,9 +36,10 @@ CREATE TABLE IF NOT EXISTS chat_rooms (
 
 -- chat_room_members
 CREATE TABLE IF NOT EXISTS chat_room_members (
-                                                 id      BIGINT AUTO_INCREMENT PRIMARY KEY,
-                                                 userid  BIGINT NOT NULL,
-                                                 roomid  BIGINT NOT NULL,
+                                                 id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+                                                 userid       BIGINT NOT NULL,
+                                                 roomid       BIGINT NOT NULL,
+                                                 last_seen_at TIMESTAMP NULL,             -- 마지막 socket 종료 시각 (미독 메시지 기준점)
                                                  UNIQUE KEY uq_user_room (userid, roomid),
     FOREIGN KEY (userid) REFERENCES users(userid) ON DELETE CASCADE,
     FOREIGN KEY (roomid) REFERENCES chat_rooms(roomid) ON DELETE CASCADE
